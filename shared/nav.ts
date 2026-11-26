@@ -5,12 +5,22 @@ import { HALL, LAYOUT, LAYOUTS } from "./map";
 
 export const CELL = 1;
 const CLEAR = 0.5; // how far a bot keeps its centre from any obstacle
-export const GW = Math.round((HALL.x1 - HALL.x0) / CELL);
-export const GH = Math.round((HALL.z1 - HALL.z0) / CELL);
+let GW = Math.round((HALL.x1 - HALL.x0) / CELL);
+let GH = Math.round((HALL.z1 - HALL.z0) / CELL);
+/** The scratch arrays are sized for the biggest building (the hall, current when this module loads). */
+const MAXN = GW * GH;
+let navLayout = LAYOUT;
+/** The grid follows the current layout: its size changes with the building. */
+function sync() {
+  if (navLayout === LAYOUT) return;
+  navLayout = LAYOUT;
+  GW = Math.round((HALL.x1 - HALL.x0) / CELL); GH = Math.round((HALL.z1 - HALL.z0) / CELL);
+}
 
 // one grid per hall configuration, built the first time that configuration is used
 const grids: (Uint8Array | undefined)[] = [];
 function grid(): Uint8Array {
+  sync();
   let g = grids[LAYOUT];
   if (g) return g;
   g = grids[LAYOUT] = new Uint8Array(GW * GH);
@@ -30,10 +40,10 @@ function grid(): Uint8Array {
 }
 
 export const cellOf = (x: number, z: number): [number, number] => [
-  Math.max(0, Math.min(GW - 1, Math.floor((x - HALL.x0) / CELL))),
+  (sync(), Math.max(0, Math.min(GW - 1, Math.floor((x - HALL.x0) / CELL)))),
   Math.max(0, Math.min(GH - 1, Math.floor((z - HALL.z0) / CELL))),
 ];
-export const isFree = (i: number, j: number) => i >= 0 && j >= 0 && i < GW && j < GH && grid()[j * GW + i] === 0;
+export const isFree = (i: number, j: number) => (sync(), i >= 0) && j >= 0 && i < GW && j < GH && grid()[j * GW + i] === 0;
 export const freeAt = (x: number, z: number) => { const [i, j] = cellOf(x, z); return isFree(i, j); };
 const centre = (i: number, j: number): [number, number] => [HALL.x0 + (i + 0.5) * CELL, HALL.z0 + (j + 0.5) * CELL];
 
@@ -59,10 +69,10 @@ function nearestFree(i: number, j: number): [number, number] | null {
   return null;
 }
 
-const gScore = new Float32Array(GW * GH);
-const came = new Int32Array(GW * GH);
-const stamp = new Uint32Array(GW * GH);
-const closedStamp = new Uint32Array(GW * GH);
+const gScore = new Float32Array(MAXN);
+const came = new Int32Array(MAXN);
+const stamp = new Uint32Array(MAXN);
+const closedStamp = new Uint32Array(MAXN);
 let curStamp = 0;
 
 // binary heap of [f, index]
@@ -95,6 +105,7 @@ const DIRS = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, 1.4142], [1, 
 
 /** A smoothed path of world points from a to b (excluding a), or null when unreachable. */
 export function findPath(ax: number, az: number, bx: number, bz: number): [number, number][] | null {
+  sync();
   if (walkable(ax, az, bx, bz)) return [[bx, bz]];
   const s = nearestFree(...cellOf(ax, az)), g = nearestFree(...cellOf(bx, bz));
   if (!s || !g) return null;
@@ -143,6 +154,7 @@ export function findPath(ax: number, az: number, bx: number, bz: number): [numbe
 
 /** A random free floor point (uniform over free cells). */
 export function randomFree(rand: () => number): [number, number] {
+  sync();
   for (let tries = 0; tries < 200; tries++) {
     const i = Math.floor(rand() * GW), j = Math.floor(rand() * GH);
     if (isFree(i, j)) return centre(i, j);

@@ -41,7 +41,7 @@ LAYOUTS.forEach((l, li) => {
 // ---- bot matches: whole matches of rounds
 function match(mission: Mission, layout: number, seed: number) {
   const sim = new Sim({ seed });
-  sim.config = { bots: [6, 6], mission, difficulty: "normal" };
+  sim.config = { bots: [6, 6], mission, map: "hall", difficulty: "normal" };
   sim.begin(layout);
   let kills = 0, teamHits = 0, done = false;
   const reasons: Record<string, number> = { plant: 0, defuse: 0, time: 0, out: 0 };
@@ -73,8 +73,8 @@ function match(mission: Mission, layout: number, seed: number) {
 console.log("bot matches, 6 v 6:");
 const role = [0, 0];
 const PLAN: [Mission, number][] = process.argv.includes("--balance")
-  ? [["server", 0], ["tags", 0], ["server", 1], ["tags", 1], ["server", 2], ["tags", 2], ["server", 0], ["tags", 1], ["server", 2]]
-  : [["server", 0], ["tags", 1], ["server", 2]];
+  ? [["server", 3], ["tags", 3], ["server", 3], ["tags", 3], ["server", 0], ["tags", 0], ["server", 1], ["tags", 1], ["server", 2], ["tags", 2], ["server", 0], ["tags", 1], ["server", 2]]
+  : [["server", 0], ["tags", 1], ["server", 2], ["server", 3], ["tags", 3]];
 PLAN.forEach(([m, l], i) => { const r = match(m, l, 40 + i * 7); role[0] += r[0]; role[1] += r[1]; });
 console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
 
@@ -82,11 +82,11 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
 {
   const sim = new Sim({ seed: 9 });
   const a = sim.addHuman("Ania", 1), b = sim.addHuman("Bartek", 1), c = sim.addHuman("Celina");
-  sim.receive(b, { t: "config", config: { bots: [20, 20], mission: "tags", difficulty: "hard" } }); // not the host: ignored
+  sim.receive(b, { t: "config", config: { bots: [20, 20], mission: "tags", map: "hall", difficulty: "hard" } }); // not the host: ignored
   sim.receive(b, { t: "start" });
   const stillLobby = sim.phase === "lobby" && sim.config.bots[0] === 5;
   sim.receive(c, { t: "team", team: 1 });
-  sim.receive(a, { t: "config", config: { bots: [20, 20], mission: "tags", difficulty: "hard" } });
+  sim.receive(a, { t: "config", config: { bots: [20, 20], mission: "tags", map: "hall", difficulty: "hard" } });
   sim.receive(a, { t: "start" });
   const s = sim.snapshot(a);
   const players = s && s.t === "snap" ? s.players : [];
@@ -99,7 +99,7 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
 {
   const fs = new Sim({ seed: 3 });
   const d = fs.addHuman("Kierowca", 0), g = fs.addHuman("Rzucający", 0);
-  fs.config = { bots: [0, 0], mission: "server", difficulty: "normal" };
+  fs.config = { bots: [0, 0], mission: "server", map: "hall", difficulty: "normal" };
   fs.begin(0);
   for (let i = 0; i < TICK_HZ * (BRIEF_S + FREEZE_S + 1); i++) fs.step(1 / TICK_HZ);
   const f0 = VEHICLE_SPAWNS[0];
@@ -141,7 +141,7 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
 
   const sim = new Sim({ seed: 5 });
   const w = sim.addHuman("Pracownik", 0), t = sim.addHuman("Technik", 1);
-  sim.config = { bots: [0, 0], mission: "server", difficulty: "normal" };
+  sim.config = { bots: [0, 0], mission: "server", map: "hall", difficulty: "normal" };
   sim.begin(0);
   for (let i = 0; i < TICK_HZ * (BRIEF_S + FREEZE_S + 2); i++) sim.step(1 / TICK_HZ);
   sim.drainEvents();

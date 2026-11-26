@@ -6,9 +6,17 @@ import { BOXES, HALL, LAYOUT, ZONES, sites } from "../shared/map";
 import type { PlayerSnap } from "../shared/proto";
 import type { VehicleState } from "../shared/vehicle";
 
-const W = 544, H = Math.round(544 * (HALL.z1 - HALL.z0) / (HALL.x1 - HALL.x0));
-const sx = W / (HALL.x1 - HALL.x0), sz = H / (HALL.z1 - HALL.z0);
+// the map is 544 px wide; its height and scale follow the current building
+const W = 544;
+let H = 0, sx = 1, sz = 1, sized = -1;
+function size() {
+  if (sized === LAYOUT) return;
+  sized = LAYOUT;
+  H = Math.round(W * (HALL.z1 - HALL.z0) / (HALL.x1 - HALL.x0));
+  sx = W / (HALL.x1 - HALL.x0); sz = H / (HALL.z1 - HALL.z0);
+}
 const X = (x: number) => (x - HALL.x0) * sx, Z = (z: number) => (z - HALL.z0) * sz;
+const hex = (c: number) => "#" + c.toString(16).padStart(6, "0");
 
 const bases: (HTMLCanvasElement | undefined)[] = [];
 
@@ -21,8 +29,9 @@ function drawBase(): HTMLCanvasElement {
     g.strokeStyle = zn.color + "66"; g.lineWidth = 1; g.strokeRect(X(zn.x0) + 0.5, Z(zn.z0) + 0.5, (zn.x1 - zn.x0) * sx - 1, (zn.z1 - zn.z0) * sz - 1);
   }
   for (const b of BOXES) {
-    if (b.kind === "wall") continue;
-    g.fillStyle = b.climb ? "#474fff" : b.kind === "rack" ? "#cbd5e1" : b.kind === "column" || b.kind === "panel" ? "#94a3b8" : b.kind === "server" ? "#0f172a" : "#e2e8f0";
+    if (b.kind === "wall" && (b.x1 <= HALL.x0 || b.x0 >= HALL.x1 || b.z1 <= HALL.z0 || b.z0 >= HALL.z1)) continue;
+    if (b.y0 > 2) continue;
+    g.fillStyle = b.kind === "wall" ? (b.color ? "#7ea6bd" : "#475569") : b.kind === "block" ? hex(b.color ?? 0x94a3b8) : b.climb ? "#474fff" : b.kind === "rack" ? "#cbd5e1" : b.kind === "column" || b.kind === "panel" ? "#94a3b8" : b.kind === "server" ? "#0f172a" : "#e2e8f0";
     g.fillRect(X(b.x0), Z(b.z0), (b.x1 - b.x0) * sx, (b.z1 - b.z0) * sz);
   }
   return c;
@@ -34,6 +43,8 @@ const TEAM_RGB = ["255,106,0", "71,79,255"];
 export interface MapMission { mission: "server" | "tags"; case: [number, number] | null; armed: number }
 
 export function drawMinimap(ctx: CanvasRenderingContext2D, players: PlayerSnap[], vehicles: VehicleState[], myId: number, myTeam: number, me: { x: number; z: number; yaw: number }, geo: boolean, t: number, mm: MapMission) {
+  size();
+  if (ctx.canvas.height !== H) { ctx.canvas.height = H; ctx.canvas.style.height = `${Math.round(280 * H / W)}px`; }
   const base = bases[LAYOUT] ?? (bases[LAYOUT] = drawBase());
   ctx.drawImage(base, 0, 0);
   // points A and B (the one that is starting up pulses), and the case of tags when it lies on the floor

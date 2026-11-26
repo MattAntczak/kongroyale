@@ -3,7 +3,7 @@
 // pickups. Every texture is drawn on a canvas at start-up, so the hall needs no downloaded assets.
 
 import * as THREE from "three";
-import { ANCHORS, BOXES, DOCKS, HALL, LADDERS, PICKUPS, ZONES, layout, type PickupKind } from "../shared/map";
+import { BOXES, HALL, LADDERS, PICKUPS, ZONES, layout, type PickupKind } from "../shared/map";
 import type { Mission } from "../shared/proto";
 import { gunModel } from "./human";
 
@@ -31,7 +31,8 @@ function noise(g: CanvasRenderingContext2D, w: number, h: number, amount: number
 // ------------------------------------------------------------------ floor
 
 function floorTexture() {
-  const PX = 7; // pixels per metre (the whole floor is one texture: 3780 px across)
+  const depot = layout().kind === "depot";
+  const PX = depot ? 14 : 7; // pixels per metre (the whole floor is one texture: 3780 px across in the hall)
   const W = (HALL.x1 - HALL.x0) * PX, H = (HALL.z1 - HALL.z0) * PX;
   const X = (x: number) => (x - HALL.x0) * PX, Z = (z: number) => (z - HALL.z0) * PX;
   return canvasTex(W, H, (g) => {
@@ -58,11 +59,23 @@ function floorTexture() {
       g.strokeRect(X(zn.x0) + 4, Z(zn.z0) + 4, (zn.x1 - zn.x0) * PX - 8, (zn.z1 - zn.z0) * PX - 8);
     }
     // hatching in the hazardous area
-    const hz = ZONES.find((z) => z.name.startsWith("STREFA"))!;
+    const hz = ZONES.find((z) => z.name.startsWith("STREFA"));
+    if (hz) {
     g.save(); g.beginPath(); g.rect(X(hz.x0), Z(hz.z0), (hz.x1 - hz.x0) * PX, 0.8 * PX); g.clip();
     g.fillStyle = "#e5b50a"; g.fillRect(X(hz.x0), Z(hz.z0), (hz.x1 - hz.x0) * PX, 0.8 * PX);
     g.fillStyle = "#111"; for (let x = X(hz.x0) - 40; x < X(hz.x1) + 40; x += 28) { g.beginPath(); g.moveTo(x, Z(hz.z0)); g.lineTo(x + 14, Z(hz.z0)); g.lineTo(x + 14 + 19, Z(hz.z0) + 0.8 * PX); g.lineTo(x + 19, Z(hz.z0) + 0.8 * PX); g.fill(); }
     g.restore();
+    }
+    // the railway track: ballast, sleepers and two rails
+    const rl = layout().rails;
+    if (rl) {
+      g.fillStyle = "#2a2623"; g.fillRect(X(rl.x0), Z(rl.z - 1.5), (rl.x1 - rl.x0) * PX, 3 * PX);
+      g.fillStyle = "#4a3b2c"; for (let x = rl.x0 + 0.3; x < rl.x1; x += 0.65) g.fillRect(X(x), Z(rl.z - 1.25), 0.24 * PX, 2.5 * PX);
+      g.fillStyle = "#b9bec7"; for (const dz of [-0.72, 0.72]) g.fillRect(X(rl.x0), Z(rl.z + dz) - 0.05 * PX, (rl.x1 - rl.x0) * PX, 0.1 * PX);
+      g.strokeStyle = "rgba(240,196,0,0.85)"; g.lineWidth = 0.12 * PX; g.setLineDash([1.2 * PX, 0.8 * PX]);
+      for (const dz of [-2, 2]) { g.beginPath(); g.moveTo(X(rl.x0), Z(rl.z + dz)); g.lineTo(X(rl.x1), Z(rl.z + dz)); g.stroke(); }
+      g.setLineDash([]);
+    }
     // yellow aisle lines in front of every rack and around stacks
     g.strokeStyle = "rgba(240,196,0,0.85)"; g.lineWidth = 1.6;
     for (const b of BOXES) {
@@ -71,6 +84,7 @@ function floorTexture() {
       g.strokeRect(X(b.x0 - m), Z(b.z0 - m), (b.x1 - b.x0 + 2 * m) * PX, (b.z1 - b.z0 + 2 * m) * PX);
     }
     // walkway arrows along the main aisle
+    if (!depot) {
     g.fillStyle = "rgba(245,245,247,0.55)";
     for (let x = HALL.x0 + 8; x < HALL.x1 - 4; x += 18) {
       g.save(); g.translate(X(x), Z(0)); g.scale(PX / 10, PX / 10); g.beginPath(); g.moveTo(-18, -10); g.lineTo(6, -10); g.lineTo(6, -20); g.lineTo(26, 0); g.lineTo(6, 20); g.lineTo(6, 10); g.lineTo(-18, 10); g.closePath(); g.fill(); g.restore();
@@ -78,10 +92,11 @@ function floorTexture() {
     g.strokeStyle = "rgba(245,245,247,0.5)"; g.setLineDash([0.9 * PX, 0.6 * PX]); g.lineWidth = 1.6;
     for (const z of [-4.2, 4.2]) { g.beginPath(); g.moveTo(X(HALL.x0), Z(z)); g.lineTo(X(HALL.x1), Z(z)); g.stroke(); }
     g.setLineDash([]);
+    }
     // zone names
     g.textAlign = "left"; g.textBaseline = "top";
     for (const zn of ZONES) {
-      g.font = `600 ${Math.round(4 * PX)}px Inter, -apple-system, sans-serif`;
+      g.font = `600 ${Math.round((depot ? 1.8 : 4) * PX)}px Inter, -apple-system, sans-serif`;
       g.fillStyle = "rgba(245,245,247,0.32)";
       const tx = X(zn.x0) + 0.8 * PX, tz = Z(zn.z0) + (zn.name.startsWith("STREFA") ? 1.3 : 0.6) * PX;
       g.fillText(zn.name, tx, tz);
@@ -198,7 +213,7 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
     if (b.kind !== "wall") continue;
     const sx = b.x1 - b.x0, sz = b.z1 - b.z0, len = Math.max(sx, sz);
     const t = wallTex.clone(); t.needsUpdate = true; t.repeat.set(len / 3, 1);
-    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, b.y1 - b.y0, sz), new THREE.MeshStandardMaterial({ map: t, roughness: 0.7, metalness: 0.35 }));
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, b.y1 - b.y0, sz), new THREE.MeshStandardMaterial({ map: t, color: b.color ?? 0xffffff, roughness: 0.7, metalness: 0.35 }));
     m.position.set((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2);
     m.receiveShadow = true;
     group.add(m);
@@ -210,15 +225,35 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
     const l = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.01, 0.12, sz + 0.01), lineMat); l.position.set(x, 1.26, z); group.add(l);
   };
   const lenX = HALL.x1 - HALL.x0, lenZ = HALL.z1 - HALL.z0;
-  plinth(0, HALL.z0 + 0.03, lenX, 0.06); plinth(0, HALL.z1 - 0.03, lenX, 0.06);
-  plinth(HALL.x0 + 0.03, 0, 0.06, lenZ); plinth(HALL.x1 - 0.03, 0, 0.06, lenZ);
+  if (layout().kind === "hall") {
+    plinth(0, HALL.z0 + 0.03, lenX, 0.06); plinth(0, HALL.z1 - 0.03, lenX, 0.06);
+    plinth(HALL.x0 + 0.03, 0, 0.06, lenZ); plinth(HALL.x1 - 0.03, 0, 0.06, lenZ);
+  }
+
+  // blocks: containers, the wagon, the crane, conveyors, stairs. Plain painted boxes; long ones get ribs
+  const blocks = new Instancer(unitBox, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, metalness: 0.25 }));
+  for (const b of BOXES) {
+    if (b.kind !== "block") continue;
+    const sx = b.x1 - b.x0, sz = b.z1 - b.z0, cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, c = b.color ?? 0x94a3b8;
+    blocks.add(cx, b.y0, cz, sx, b.y1 - b.y0, sz, c);
+    // corrugation on anything container-sized: darker ribs along the long sides
+    const long = Math.max(sx, sz), h = b.y1 - b.y0;
+    if (b.y0 === 0 && long >= 10 && Math.min(sx, sz) < 4 && h >= 2.5 && h < 6) {
+      const dark = new THREE.Color(c).multiplyScalar(0.72).getHex();
+      for (let d = 0.6; d < long - 0.3; d += 1.2) {
+        if (sx > sz) blocks.add(b.x0 + d, 0.15, cz, 0.12, h - 0.3, sz + 0.06, dark);
+        else blocks.add(cx, 0.15, b.z0 + d, sx + 0.06, h - 0.3, 0.12, dark);
+      }
+    }
+  }
+  blocks.build(group);
 
   // dock doors on the east wall
   const doorTex = canvasTex(256, 256, (g) => {
     g.fillStyle = "#c9ccd2"; g.fillRect(0, 0, 256, 256);
     for (let y = 0; y < 256; y += 12) { g.fillStyle = "rgba(0,0,0,0.22)"; g.fillRect(0, y, 256, 2); g.fillStyle = "rgba(255,255,255,0.25)"; g.fillRect(0, y + 3, 256, 1); }
   });
-  DOCKS.forEach((z, i) => {
+  layout().docks.forEach((z, i) => {
     const frame = new THREE.Mesh(new THREE.BoxGeometry(0.2, 4.3, 3.8), new THREE.MeshStandardMaterial({ color: 0x1b1c20 }));
     frame.position.set(HALL.x1 - 0.06, 2.15, z); group.add(frame);
     const door = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 3.8), new THREE.MeshStandardMaterial({ map: doorTex, roughness: 0.5, metalness: 0.4 }));
@@ -463,11 +498,11 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
   const ledMat = new THREE.MeshBasicMaterial({ color: ACCENT });
   const anchorMat = new THREE.MeshStandardMaterial({ color: 0xf5f5f7, roughness: 0.4 });
   const leds: THREE.Mesh[] = [];
-  for (const [x, z] of ANCHORS) {
+  for (const [x, z] of layout().anchors) {
     const a = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.16, 0.28), anchorMat);
     const onWall = Math.abs(x) > HALL.x1 - 1 || Math.abs(z) > HALL.z1 - 1;
-    a.position.set(x + (onWall ? 0 : 0.45), 8, z); group.add(a);
-    const led = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), ledMat); led.position.set(a.position.x, 7.9, a.position.z); group.add(led); leds.push(led);
+    a.position.set(x + (onWall ? 0 : 0.45), Math.min(8, HALL.h - 1), z); group.add(a);
+    const led = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), ledMat); led.position.set(a.position.x, a.position.y - 0.1, a.position.z); group.add(led); leds.push(led);
   }
 
   rackUp.build(group); beams.build(group); pallets.build(group); wrapped.build(group);

@@ -25,7 +25,7 @@ check(a.snap.phase === "lobby" && a.snap.host === a.id, "the first player hosts 
 b.ws.send(JSON.stringify({ t: "start" }));
 await sleep(300);
 check(a.snap.phase === "lobby", "a guest cannot start the shift");
-a.ws.send(JSON.stringify({ t: "config", config: { bots: [0, 2], mission: "server", difficulty: "easy" } }));
+a.ws.send(JSON.stringify({ t: "config", config: { bots: [0, 2], mission: "server", map: "hall", difficulty: "easy" } }));
 a.ws.send(JSON.stringify({ t: "start" }));
 await sleep(500);
 console.log("phase", a.snap.phase, "layout", a.snap.layout, "mission", a.snap.mission, "players", a.snap.players.length);

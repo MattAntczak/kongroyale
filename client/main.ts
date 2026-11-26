@@ -19,7 +19,7 @@ let room = "";
 let game: Game | null = null;
 let lobby: Snap | null = null;
 /** What we want the shift to be; sent to the host whenever we are it. */
-let want: Config = { bots: [5, 5], mission: "random", difficulty: "normal" };
+let want: Config = { bots: [5, 5], mission: "random", map: "depot", difficulty: "normal" };
 
 const store = {
   get(k: string) { try { return localStorage.getItem(k) ?? ""; } catch { return ""; } },
@@ -98,6 +98,7 @@ function renderLobby() {
     document.querySelector<HTMLElement>(`.team-card[data-team="${t}"]`)!.classList.toggle("mine", mine);
   }
   for (const b of document.querySelectorAll<HTMLButtonElement>("#missionRow button")) { b.setAttribute("aria-pressed", String(b.dataset.mission === cfg.mission)); b.disabled = !host; }
+  for (const b of document.querySelectorAll<HTMLButtonElement>("#mapRow button")) { b.setAttribute("aria-pressed", String(b.dataset.map === cfg.map)); b.disabled = !host; }
   for (const b of document.querySelectorAll<HTMLButtonElement>("#diffRow button")) { b.setAttribute("aria-pressed", String(b.dataset.diff === cfg.difficulty)); b.disabled = !host; }
   for (const b of document.querySelectorAll<HTMLButtonElement>(".stepper button")) b.disabled = !host;
   $<HTMLButtonElement>("play").disabled = !host;
@@ -124,6 +125,8 @@ document.addEventListener("click", (e) => {
   }
   const mission = el.closest<HTMLButtonElement>("#missionRow button");
   if (mission) { setConfig((c) => { c.mission = mission.dataset.mission as Config["mission"]; }); return; }
+  const map = el.closest<HTMLButtonElement>("#mapRow button");
+  if (map) { setConfig((c) => { c.map = map.dataset.map as Config["map"]; }); return; }
   const diff = el.closest<HTMLButtonElement>("#diffRow button");
   if (diff) { setConfig((c) => { c.difficulty = diff.dataset.diff as Config["difficulty"]; }); return; }
   const m = el.closest<HTMLButtonElement>("#modeRow button");

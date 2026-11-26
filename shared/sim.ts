@@ -9,7 +9,7 @@
 // the walls and a speed limit and sends a correction when one fails. Shots are decided here: each one launches real
 // cardboard boxes that fly tick by tick, and a box tests players where the shooter saw them (up to 300 ms back).
 
-import { BOXES, PICKUPS, SPAWNS, HALL, LAYOUTS, VEHICLE_SPAWNS, sites, useLayout, type Box as HallBox, type PickupKind, type PickupSpot } from "./map";
+import { BOXES, PICKUPS, SPAWNS, HALL, LAYOUTS, HALL_LAYOUTS, DEPOT_LAYOUT, VEHICLE_SPAWNS, sites, useLayout, type Box as HallBox, type PickupKind, type PickupSpot } from "./map";
 import { SEATS, VEH_MAX_SPEED, VEH_USE_R, seatPos, stepVehicle, vehicleBlocked, vehicleBox, type VehicleState } from "./vehicle";
 import { EYE_H, PLAYER_H, SPRINT_SPEED, blocked, lineOfSight, rayPlayer, rayWorld, setDynamicBoxes, stepBody, viewDir, type Body } from "./physics";
 import { BOX_GRAVITY, BOX_LIFE_S, GRENADE_FUSE_S, GRENADE_GRAVITY, GRENADE_R, WEAPONS, falloff, lobPitch, type WeaponId } from "./weapons";
@@ -145,7 +145,7 @@ export class Sim {
   time = 0;
   phase: "lobby" | "brief" | "freeze" | "play" | "round" | "end" = "lobby";
   /** What the next shift will be: bots per team, the mission, the bots' level. Set in the lobby by the host. */
-  config: Config = { bots: [5, 5], mission: "random", difficulty: "normal" };
+  config: Config = { bots: [5, 5], mission: "random", map: "depot", difficulty: "normal" };
   /** The hall configuration and the mission of this shift. */
   layout = 0;
   mission: Mission = "server";
@@ -183,7 +183,7 @@ export class Sim {
 
   constructor(readonly opts: SimOptions = {}) {
     this.rand = mulberry32(opts.seed ?? 1234567);
-    this.layout = Math.floor(this.rand() * LAYOUTS.length);
+    this.layout = Math.floor(this.rand() * HALL_LAYOUTS);
   }
 
   get humanCount() { let n = 0; for (const p of this.players.values()) if (!p.bot) n++; return n; }
@@ -266,6 +266,7 @@ export class Sim {
     this.config = {
       bots: [n(c.bots[0]), n(c.bots[1])],
       mission: c.mission === "server" || c.mission === "tags" ? c.mission : "random",
+      map: c.map === "hall" ? "hall" : "depot",
       difficulty: c.difficulty === "easy" || c.difficulty === "hard" ? c.difficulty : "normal",
     };
   }
@@ -274,7 +275,8 @@ export class Sim {
   begin(forceLayout = -1) {
     if (this.phase !== "lobby") return;
     // a different configuration from last time (tests may name one)
-    this.layout = forceLayout >= 0 ? forceLayout : (this.layout + 1 + Math.floor(this.rand() * (LAYOUTS.length - 1))) % LAYOUTS.length;
+    this.layout = forceLayout >= 0 ? forceLayout : this.config.map === "depot" ? DEPOT_LAYOUT
+      : ((this.layout % HALL_LAYOUTS) + 1 + Math.floor(this.rand() * (HALL_LAYOUTS - 1))) % HALL_LAYOUTS;
     useLayout(this.layout);
     this.mission = this.config.mission === "random" ? (this.rand() < 0.5 ? "server" : "tags") : this.config.mission;
     for (const p of [...this.players.values()]) if (p.bot) this.players.delete(p.id);
@@ -653,7 +655,7 @@ export class Sim {
   private respawn(p: Player) {
     // the workers start in the west of the hall, the technicians at the docks in the east; each takes the next free
     // spawn of their side
-    const mine = SPAWNS.filter(([x]) => (p.team === 0 ? x < 0 : x > 0));
+    const mine = LAYOUTS[this.layout].teamSpawns?.[p.team] ?? SPAWNS.filter(([x]) => (p.team === 0 ? x < 0 : x > 0));
     const [sx, sz] = mine[this.spawnSeq[p.team]++ % mine.length];
     // more players than spawn points: later ones stand a step aside
     const lap = Math.floor((this.spawnSeq[p.team] - 1) / mine.length) % 4;
@@ -694,7 +696,7 @@ export class Sim {
     if (this.phase === "brief") { if (this.time >= this.phaseEnd) this.startRound(); return; }
     if (this.phase === "freeze") {
       if (this.time >= this.phaseEnd) {
-        this.phase = "play"; this.phaseEnd = this.time + ROUND_S;
+        this.phase = "play"; this.phaseEnd = this.time + (LAYOUTS[this.layout].roundS ?? ROUND_S);
         for (const p of this.players.values()) { p.protectUntil = this.time + SPAWN_PROTECT_S; p.lastStateT = this.time; }
       }
       return;
@@ -933,7 +935,14 @@ export class Sim {
       if (this.mission === "tags" && this.caseAt && Math.hypot(this.caseAt.x - b.x, this.caseAt.z - b.z) < 70) { out[0] = this.caseAt.x; out[1] = this.caseAt.z; return true; }
       // up this round's route (the north edge of the hall, the main aisle or the south edge) as far as the west
       // racking, and only there turn for the point: the push comes from three sides, not through the middle
-      const route = br.lane === 0 ? ROUTE_MID : ROUTE_FLANK;
+      const lanes = LAYOUTS[this.layout].routes?.[this.botSite];
+      if (lanes) {
+        // the depot: one of three ways through the rooms to this round's point
+        const way = lanes[br.lane + 1];
+        while (br.wp < way.length && Math.hypot(way[br.wp][0] - b.x, way[br.wp][1] - b.z) < 4.5) br.wp++;
+        if (br.wp < way.length) { out[0] = way[br.wp][0]; out[1] = way[br.wp][1]; return true; }
+      }
+      const route = lanes ? [] : br.lane === 0 ? ROUTE_MID : ROUTE_FLANK;
       while (br.wp < route.length && (b.x < route[br.wp][0] + 4 || Math.hypot(route[br.wp][0] - b.x, route[br.wp][1] * br.lane - b.z) < 7)) br.wp++;
       if (br.wp < route.length) { out[0] = route[br.wp][0]; out[1] = br.lane === 0 ? route[br.wp][1] : route[br.wp][1] * br.lane; return true; }
       const s = pts[this.botSite];

@@ -129,17 +129,20 @@ export class Game {
     this.scene.fog = new THREE.Fog(0x07070a, 90, 460);
 
     // light: a cool sky fill, a key from the roof lights with shadows, a few warm points down the hall
-    this.scene.add(new THREE.HemisphereLight(0xdfe4ff, 0x2a2622, 1.25));
+    const depot = LAYOUTS[first.layout].kind === "depot";
+    this.scene.add(new THREE.HemisphereLight(0xdfe4ff, depot ? 0x4a4640 : 0x2a2622, depot ? 2.1 : 1.25));
     const key = new THREE.DirectionalLight(0xffffff, 1.6);
-    key.position.set(-60, 120, 40);
+    // in the depot the light falls almost straight down, so the walls between the rooms do not shade the floors
+    if (depot) key.position.set(-8, 120, 6); else key.position.set(-60, 120, 40);
     key.castShadow = true;
     key.shadow.mapSize.set(4096, 4096);
-    Object.assign(key.shadow.camera, { left: -285, right: 285, top: 160, bottom: -160, near: 1, far: 320 });
+    Object.assign(key.shadow.camera, depot ? { left: -100, right: 100, top: 70, bottom: -70, near: 1, far: 320 } : { left: -285, right: 285, top: 160, bottom: -160, near: 1, far: 320 });
     key.shadow.bias = -0.0006;
     key.shadow.normalBias = 0.03;
     this.scene.add(key);
-    for (const [x, z] of [[-200, 0], [-100, 0], [0, -60], [0, 60], [100, 0], [200, 0]]) {
-      const p = new THREE.PointLight(0xfff1dc, 80, 70, 1.6); p.position.set(x, 9.5, z); this.scene.add(p);
+    const points = depot ? [[-64, -27], [-64, 11], [-4, -4], [51, 2], [0, 46], [50, -23]] : [[-200, 0], [-100, 0], [0, -60], [0, 60], [100, 0], [200, 0]];
+    for (const [x, z] of points) {
+      const p = new THREE.PointLight(0xfff1dc, depot ? 60 : 80, 70, 1.6); p.position.set(x, depot ? 6.8 : 9.5, z); this.scene.add(p);
     }
     this.world = buildWorld(this.scene, first.mission);
     const caseMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.3, metalness: 0.5, emissive: 0x474fff, emissiveIntensity: 0.25 });
@@ -375,7 +378,7 @@ export class Game {
     $("crawlText").innerHTML = `<p class="ep">${st.episode}</p><h1>${st.title}</h1>` + st.text.map((t) => `<p>${t}</p>`).join("");
     const team = m.me.team & 1;
     $("briefRole").innerHTML = `<span class="badge" style="background:${TEAM_CSS[team]};color:#fff">${TEAM_NAMES[team]}</span><b>${st.task[team]}</b>`;
-    $("briefLayout").textContent = `Konfiguracja hali ${LAYOUTS[m.layout].name}`;
+    $("briefLayout").textContent = LAYOUTS[m.layout].kind === "depot" ? "Mapa: Zajezdnia" : `Hala magazynowa, konfiguracja ${LAYOUTS[m.layout].name}`;
     $("brief").hidden = m.phase !== "brief";
     // restart the crawl
     const el = $("crawlText"); el.style.animation = "none"; void el.offsetHeight; el.style.animation = "";

@@ -13,6 +13,8 @@ export interface Config {
   /** Bots in each team: [workers, technicians]. People come on top, up to 20 a team. */
   bots: [number, number];
   mission: Mission | "random";
+  /** "depot": the railway depot (rooms around a track). "hall": the big warehouse hall, one of its three configurations. */
+  map: "depot" | "hall";
   difficulty: Difficulty;
 }
 

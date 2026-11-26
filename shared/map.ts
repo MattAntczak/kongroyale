@@ -1,5 +1,5 @@
-// The efectivo warehouse: one hall of 540 × 290 m (156 600 m²) at real scale, in three configurations so nobody
-// learns it by heart. A configuration is generated from a short description (where the rack blocks are cut by cross
+// The efectivo maps. Two buildings: the railway depot (`buildDepot`, rooms around a track) and the warehouse hall of
+// 540 × 290 m (156 600 m²) at real scale, in three configurations so nobody learns it by heart. A configuration is generated from a short description (where the rack blocks are cut by cross
 // aisles, which racks are perches, what stands in the middle), so the floor fills itself at any size. Every solid thing is an axis-aligned box (collision and thrown boxes use the same list on the
 // client and the server); the client dresses each box up by its `kind` (client/world.ts). Units are metres, +Y up,
 // +X east, +Z south. The hall floor is y = 0.
@@ -11,7 +11,7 @@
 // One configuration is current at a time: `useLayout(i)` swaps what BOXES, LADDERS and the rest point at (the
 // exports are live bindings). A host that runs several rooms calls it before it touches a room.
 
-export type BoxKind = "wall" | "rack" | "stack" | "table" | "column" | "drum" | "office" | "forklift" | "cage" | "server" | "panel";
+export type BoxKind = "wall" | "rack" | "stack" | "table" | "column" | "drum" | "office" | "forklift" | "cage" | "server" | "panel" | "block";
 
 export interface Box {
   x0: number; y0: number; z0: number;
@@ -21,6 +21,8 @@ export interface Box {
   shotY1?: number;
   /** A rack with a ladder and a deck on top: a sniper's perch. */
   climb?: boolean;
+  /** Paint for a "block" (a container, a wagon, a crane leg) or a tint for a wall. */
+  color?: number;
 }
 
 export interface Zone { name: string; color: string; x0: number; z0: number; x1: number; z1: number }
@@ -38,8 +40,25 @@ export type PickupKind = "med" | "ammo" | "shotgun" | "geo";
 export interface PickupSpot { kind: PickupKind; x: number; z: number }
 export interface Point { x: number; z: number }
 
+export interface Hall { x0: number; x1: number; z0: number; z1: number; h: number }
+
 export interface Layout {
   name: string;
+  /** "hall": the open warehouse with a main aisle. "depot": rooms and doorways around a railway track. */
+  kind: "hall" | "depot";
+  /** Inner extent of the building and the height of its ceiling. */
+  hall: Hall;
+  /** Spawns by role, [workers, technicians], when the side cannot be told from x. */
+  teamSpawns?: [[number, number][], [number, number][]];
+  /** Bot routes for the technicians: for each point (A, B) three lanes of waypoints. */
+  routes?: [number, number][][][];
+  /** Seconds a round lasts here (the default suits the big hall). */
+  roundS?: number;
+  /** A railway track painted on the floor, along x. */
+  rails?: { x0: number; x1: number; z: number };
+  anchors: [number, number][];
+  /** Dock doors on the east wall (z centres). */
+  docks: number[];
   boxes: Box[]; ladders: Ladder[]; zones: Zone[];
   /** Where players come back in: west points are the workers', east points the technicians'. */
   spawns: [number, number][];
@@ -52,7 +71,9 @@ export interface Layout {
 }
 
 /** Inner extent of the hall; the walls sit just outside it. */
-export const HALL = { x0: -270, x1: 270, z0: -145, z1: 145, h: 13 } as const;
+const BIG: Hall = { x0: -270, x1: 270, z0: -145, z1: 145, h: 13 };
+/** Inner extent of the current building; the walls sit just outside it. Swapped by `useLayout`. */
+export let HALL: Hall = BIG;
 
 /** Ordinary racks: too tall to reach or to jump onto. */
 export const RACK_H = 9;
@@ -83,6 +104,14 @@ interface Cfg {
   /** Points A and B for each mission, before the flip. */
   servers: [number, number][];
   stations: [number, number][];
+}
+
+/** UWB anchors (the efectivo positioning network): along the walls. Visual only. */
+function anchorsFor(h: Hall, step: number): [number, number][] {
+  const a: [number, number][] = [];
+  for (let x = h.x0 + step / 2; x < h.x1; x += step) { a.push([x, h.z0 + 0.4]); a.push([x, h.z1 - 0.4]); }
+  for (let z = h.z0 + step / 2; z < h.z1; z += step) { a.push([h.x0 + 0.4, z]); a.push([h.x1 - 0.4, z]); }
+  return a;
 }
 
 function build(cfg: Cfg): Layout {
@@ -220,10 +249,167 @@ function build(cfg: Cfg): Layout {
     { name: "WYSYŁKA", color: "#6366F1", x0: 88, z0: HALL.z0, x1: HALL.x1, z1: HALL.z1 },
   ];
   void MID_X0; void MID_X1;
-  return { name: cfg.name, boxes, ladders, zones, servers, stations, spawns, pickups, vehicles };
+  return { name: cfg.name, kind: "hall", hall: BIG, anchors: anchorsFor(BIG, 60), docks: Array.from({ length: 21 }, (_, i) => -130 + i * 13), boxes, ladders, zones, servers, stations, spawns, pickups, vehicles };
 }
 
-/** The three configurations of the hall. */
+
+// ---------------------------------------------------------------- the railway depot
+//
+// A smaller, closed arena in the manner of a CS map: 184 × 120 m of rooms joined by 4 m doorways. A track with a
+// wagon runs through the central hall; point A is the heavy transshipment bay in the west (a big transport crate, a
+// mezzanine with two stairs), point B the cold store in the east (its own chambers behind thick walls). Containers,
+// the packing room, the workshop and the offices are ways round the central hall. The technicians start in the
+// south-west, the workers in the south-east, the docks lie between them.
+//
+// The building is drawn as open rectangles (rooms and doorways) on a 1 m grid; everything else is solid wall.
+function buildDepot(): Layout {
+  const D: Hall = { x0: -92, x1: 92, z0: -60, z1: 60, h: 8 };
+  type R = [number, number, number, number]; // x0, x1, z0, z1
+  const A: R = [-88, -40, -44, -10], CONT: R = [-88, -40, -8, 30], TROOM: R = [-88, -62, 32, 58], TPASS: R = [-62, -40, 40, 54];
+  const YARD: R = [-40, 58, 34, 58], CENTRE: R = [-38, 30, -30, 22], NCORR: R = [-38, 40, -52, -32], WORK: R = [42, 68, -58, -34];
+  const OFFICE: R = [70, 88, -54, -40], PACK: R = [32, 68, -30, -16], B: R = [32, 70, -14, 18], SECORR: R = [32, 80, 20, 32], CT: R = [60, 88, 34, 58];
+  const CH1: R = [72, 90, -36, -22], CH2: R = [72, 90, -20, -4], CH3: R = [72, 90, -2, 18];
+  const open: R[] = [A, CONT, TROOM, TPASS, YARD, CENTRE, NCORR, WORK, OFFICE, PACK, B, SECORR, CT, CH1, CH2, CH3,
+    // doorways
+    [-80, -76, -10, -8], [-52, -48, -10, -8],       // A – containers
+    [-40, -38, -22, -18], [-40, -38, -42, -38],     // A – central hall, A – north corridor
+    [-40, -38, 8, 12], [-46, -42, 30, 40],          // containers – central hall, containers – technicians' passage
+    [-20, -15, 22, 34], [12, 17, 22, 34],           // docks – central hall (two passages)
+    [58, 60, 44, 48], [46, 50, 32, 34], [72, 76, 32, 34], // docks – workers, docks – south-east corridor, workers – corridor
+    [48, 52, 18, 20], [74, 78, 18, 20],             // corridor – cold store, corridor – chambers
+    [30, 32, 0, 4], [30, 32, -26, -22],             // central hall – cold store, central hall – packing
+    [-24, -20, -32, -30], [10, 14, -32, -30],       // central hall – north corridor
+    [34, 38, -32, -30], [40, 42, -46, -42],         // north corridor – packing, north corridor – workshop
+    [60, 64, -34, -30], [68, 70, -50, -46],         // workshop – packing, workshop – offices
+    [82, 86, -40, -36], [74, 78, -22, -20], [84, 88, -4, -2], // offices – chambers, between the chambers
+    [70, 72, -14, -10], [56, 60, -16, -14],         // cold store – chambers, cold store – packing
+  ];
+  const GW = D.x1 - D.x0, GH = D.z1 - D.z0;
+  const solid = new Uint8Array(GW * GH).fill(1);
+  for (const [x0, x1, z0, z1] of open) for (let z = z0; z < z1; z++) for (let x = x0; x < x1; x++) solid[(z - D.z0) * GW + (x - D.x0)] = 0;
+  // the walls of the cold store and its chambers are insulated panels: a cold tint
+  const COLD = 0xbfe3f5;
+  const tint = (i: number, j: number) => { const x = i + D.x0, z = j + D.z0; return x >= 30 && z >= -38 && z < 20 ? 2 : 1; };
+  const boxes: Box[] = [];
+  let live = new Map<string, Box>();
+  for (let j = 0; j < GH; j++) {
+    const next = new Map<string, Box>();
+    for (let i = 0; i < GW;) {
+      if (!solid[j * GW + i]) { i++; continue; }
+      const t = tint(i, j); let e = i;
+      while (e < GW && solid[j * GW + e] && tint(e, j) === t) e++;
+      const key = `${i}:${e}:${t}`, prev = live.get(key);
+      if (prev) { prev.z1 = j + 1 + D.z0; next.set(key, prev); }
+      else { const b: Box = { kind: "wall", x0: i + D.x0, x1: e + D.x0, z0: j + D.z0, z1: j + 1 + D.z0, y0: 0, y1: D.h + 1, color: t === 2 ? COLD : undefined }; boxes.push(b); next.set(key, b); }
+      i = e;
+    }
+    live = next;
+  }
+
+  const keep: [number, number, number][] = [];
+  const free = (x: number, z: number, m: number) => {
+    for (const b of boxes) if (b.y0 < 2 && x + m > b.x0 && x - m < b.x1 && z + m > b.z0 && z - m < b.z1) return false;
+    for (const [kx, kz, kr] of keep) if (Math.abs(kx - x) < kr + m && Math.abs(kz - z) < kr + m) return false;
+    return true;
+  };
+  const blk = (x0: number, x1: number, z0: number, z1: number, y0: number, y1: number, color: number) => { boxes.push({ kind: "block", x0, x1, z0, z1, y0, y1, color }); };
+  const add = (kind: BoxKind, cx: number, cz: number, sx: number, sz: number, h: number) => { boxes.push({ kind, x0: cx - sx / 2, x1: cx + sx / 2, z0: cz - sz / 2, z1: cz + sz / 2, y0: 0, y1: h }); };
+
+  // points A and B
+  const servers = [{ x: -70, z: -22 }, { x: 52, z: 2 }];
+  for (const sv of servers) add("server", sv.x, sv.z, 1.0, 1.0, 2.1);
+  const stations = [{ x: -58, z: -33 }, { x: 44, z: -4 }];
+  for (const st of stations) keep.push([st.x, st.z, 3]);
+  for (const sv of servers) keep.push([sv.x, sv.z, 2.5]);
+
+  // spawns
+  const tSpawns: [number, number][] = [], wSpawns: [number, number][] = [];
+  for (const z of [36, 40.5, 45, 49.5]) for (const x of [-85, -80.5, -76, -71.5, -67]) tSpawns.push([x, z]);
+  for (const z of [38, 43, 48, 53]) for (const x of [64, 69, 74, 79, 84]) wSpawns.push([x, z]);
+  for (const [x, z] of [...tSpawns, ...wSpawns]) keep.push([x, z, 1.5]);
+  const vehicles = [{ x: -28, z: 38, yaw: 0 }, { x: 40, z: 54, yaw: Math.PI }];
+  for (const v of vehicles) keep.push([v.x, v.z, 2.6]);
+
+  // zone A, heavy transshipment: a mezzanine along the north wall with a stair at each end, and the big crate
+  const STEEL = 0x4b5563, STEP = 0.3, RUN = 0.6;
+  blk(-84, -44, -44, -38, 0, 2.7, STEEL);
+  for (const [sx0, sx1] of [[-84, -81], [-47, -44]]) for (let k = 8; k >= 1; k--) {
+    const z0 = -38 + (8 - k) * RUN;
+    blk(sx0, sx1, z0, z0 + RUN, 0, k * STEP, 0xf2c200);
+  }
+  blk(-63, -52, -27, -16, 0, 4, 0xa37b4b);
+  // containers: a small maze between the technicians' side and A
+  const CONT_COLORS = [0x1d4ed8, 0xc2410c, 0x15803d, 0xb91c1c, 0x0e7490];
+  const containers: [number, number, number, number, number][] = [
+    [-84, -72, -2, 0.6, 2.6], [-68, -56, -2, 0.6, 5.2], [-62, -59.4, 6, 18, 2.6], [-80, -68, 10, 12.6, 2.6], [-56, -44, 20, 22.6, 2.6],
+    [-84, -72, 20, 22.6, 5.2], [-52, -49.4, -2, 10, 2.6], [-34, -22, 44, 46.6, 2.6], [24, 36, 40, 42.6, 2.6], [-8, 4, 36, 38.6, 5.2],
+  ];
+  containers.forEach(([x0, x1, z0, z1, h], i) => blk(x0, x1, z0, z1, 0, h, CONT_COLORS[i % CONT_COLORS.length]));
+  // the central hall: the track with a wagon, low concrete barriers along it, the gantry crane in the east
+  const CONCRETE = 0x9ca3af, CRANE = 0xf2c200;
+  blk(-10, 6, -6.6, -3.4, 0, 3.4, 0x7c2d12);
+  for (const [x0, x1] of [[-36, -26], [-20, -12], [8, 16], [22, 28]]) blk(x0, x1, -8.3, -7.9, 0, 0.9, CONCRETE);
+  for (const [x0, x1] of [[-32, -22], [-16, -11], [7, 12], [18, 26]]) blk(x0, x1, -2.1, -1.7, 0, 0.9, CONCRETE);
+  blk(21.5, 22.5, -28.5, -27.5, 0, 7, CRANE); blk(21.5, 22.5, 19.5, 20.5, 0, 7, CRANE);
+  blk(21.4, 22.6, -28.5, 20.5, 6.2, 7, CRANE); blk(21.1, 22.9, -6, -4, 4.8, 6.2, 0x1f2937);
+  // packing: two conveyors; the workshop and the offices: benches and desks
+  blk(38, 54, -20.6, -19.4, 0, 0.9, 0x6b7280); blk(44, 64, -27.6, -26.4, 0, 0.9, 0x6b7280);
+  for (const [x, z] of [[48, -52], [56, -52], [62, -42], [48, -40], [76, -50], [82, -44], [40, -17.5], [60, -22.5]]) add("table", x, z, 2.4, 1.2, 0.95);
+  for (const [x, z] of [[52, -38], [52.7, -38], [52.35, -37.4], [66, -56], [66, -55.3]]) add("drum", x, z, 0.6, 0.6, 0.95);
+  // the docks: a truck backed up to a door, and the doors themselves on the south wall
+  blk(0, 2.6, 44, 57.6, 0, 3.8, 0xe5e7eb); blk(0.1, 2.5, 40.6, 44, 0, 2.9, 0x474fff);
+  for (const x of [-24, -12, 14, 26]) blk(x - 1.6, x + 1.6, 57.8, 58, 0, 3.8, 0xc9ccd2);
+
+  // pallets: cover in every room
+  let hi = 0;
+  const stack = (x: number, z: number, big = false) => {
+    const sx = big ? 2.4 : 1.4, sz = big ? 2.0 : 1.2;
+    if (!free(x, z, Math.max(sx, sz) / 2 + 1.0)) return;
+    add("stack", x, z, sx, sz, STACK_H[hi++ % STACK_H.length]);
+  };
+  const pickups: PickupSpot[] = [];
+  const pick = (kind: PickupKind, x: number, z: number) => { if (free(x, z, 1.2)) { pickups.push({ kind, x, z }); keep.push([x, z, 1.6]); } };
+  for (const [k, x, z] of [
+    ["med", -44, -14], ["ammo", -84, -30], ["ammo", -70, 5], ["med", -50, 26], ["med", -34, 18], ["ammo", 26, -26], ["geo", -16, -5],
+    ["shotgun", 0, -48], ["med", 30, -36], ["ammo", 64, -54], ["geo", 84, -50], ["med", 64, -18], ["ammo", 36, 16], ["med", 66, -12],
+    ["shotgun", 88, -28], ["med", 88, 14], ["ammo", 56, 28], ["ammo", -30, 54], ["med", 30, 54], ["shotgun", 48, 40], ["shotgun", -86, 26],
+  ] as [PickupKind, number, number][]) pick(k, x, z);
+  for (const [x, z, big] of [
+    [-76, -30, 1], [-46, -28, 1], [-82, -14, 0], [-58, -12.5, 0], [-74, -14, 1], [-44, -20, 0],          // A
+    [-76, 26, 0], [-44, 2, 1], [-86, 6, 0],                                                              // containers
+    [-28, 10, 1], [-8, 14, 1], [8, -20, 1], [-20, -22, 1], [18, 10, 1], [-30, -14, 0], [0, 6, 0], [-4, -14, 0], [26, 14, 0], [-34, -26, 1], // centre
+    [-10, -42, 1], [24, -40, 0], [-30, -48, 1], [8, -50, 0],                                             // north corridor
+    [40, -8, 1], [62, -8, 0], [40, 12, 0], [62, 12, 1], [46, 6, 1], [58, -2, 1], [66, 2, 0],              // B, the cold store
+    [80, -29, 1], [86, -12, 0], [78, 6, 1], [86, 10, 0], [76, -8, 0],                                    // chambers
+    [40, 26, 1], [66, 24, 0], [-36, 52, 1], [18, 50, 1], [-16, 40, 0], [52, 52, 1], [-52, 44, 0],         // corridor, docks
+  ] as [number, number, number][]) stack(x, z, !!big);
+
+  const zones: Zone[] = [
+    { name: "A · PRZEŁADUNEK", color: "#F59E0B", x0: A[0], x1: A[1], z0: A[2], z1: A[3] },
+    { name: "KONTENERY", color: "#6366F1", x0: CONT[0], x1: CONT[1], z0: CONT[2], z1: CONT[3] },
+    { name: "TOR", color: "#64748B", x0: CENTRE[0], x1: CENTRE[1], z0: CENTRE[2], z1: CENTRE[3] },
+    { name: "B · CHŁODNIA", color: "#38BDF8", x0: B[0], x1: B[1], z0: B[2], z1: B[3] },
+    { name: "KOMORY", color: "#0EA5E9", x0: CH1[0], x1: CH1[1], z0: CH1[2], z1: CH3[3] },
+    { name: "PAKOWNIA", color: "#3B82F6", x0: PACK[0], x1: PACK[1], z0: PACK[2], z1: PACK[3] },
+    { name: "WARSZTAT", color: "#EF4444", x0: WORK[0], x1: WORK[1], z0: WORK[2], z1: WORK[3] },
+    { name: "BIURA", color: "#8B5CF6", x0: OFFICE[0], x1: OFFICE[1], z0: OFFICE[2], z1: OFFICE[3] },
+    { name: "DOKI", color: "#10B981", x0: YARD[0], x1: YARD[1], z0: YARD[2], z1: YARD[3] },
+    { name: "TECHNICY", color: "#474FFF", x0: TROOM[0], x1: TROOM[1], z0: TROOM[2], z1: TROOM[3] },
+    { name: "PRACOWNICY", color: "#FF6A00", x0: CT[0], x1: CT[1], z0: CT[2], z1: CT[3] },
+  ];
+  // the technicians' bots: three ways to each point
+  const routes: [number, number][][][] = [
+    [[[-44, 36], [-48, 14], [-50, -6]], [[-30, 47], [-17.5, 28], [-30, -12], [-36, -20]], [[-30, 47], [14.5, 28], [12, -29], [-30, -42], [-36, -40]]],
+    [[[40, 46], [48, 31], [50, 22]], [[-17.5, 28], [10, 8], [28, 2]], [[14.5, 28], [20, -24], [34, -24], [58, -18]]],
+  ];
+  return {
+    name: "Zajezdnia", kind: "depot", hall: D, boxes, ladders: [], zones, servers, stations,
+    spawns: [...wSpawns, ...tSpawns], teamSpawns: [wSpawns, tSpawns], routes, roundS: 150, rails: { x0: -38, x1: 30, z: -5 },
+    pickups, vehicles, anchors: anchorsFor(D, 30), docks: [],
+  };
+}
+
+/** The three configurations of the hall, then the railway depot. */
 export const LAYOUTS: readonly Layout[] = [
   build({
     name: "A", flip: 1,
@@ -252,7 +438,11 @@ export const LAYOUTS: readonly Layout[] = [
     eastPerch: [[24.5, 0], [71, 0], [117.5, 0], [55.5, 1]],
     servers: [[-82, 34.25], [-82, -92.75]], stations: [[-94, 60.25], [-94, -40.75]],
   }),
+  buildDepot(),
 ];
+/** How many of the layouts are configurations of the big hall (the depot comes after them). */
+export const HALL_LAYOUTS = 3;
+export const DEPOT_LAYOUT = 3;
 
 /** Index of the current configuration. */
 export let LAYOUT = 0;
@@ -277,16 +467,7 @@ export const sites = (mission: "server" | "tags"): readonly Point[] => mission =
 export function useLayout(i: number) {
   if (i === LAYOUT || !LAYOUTS[i]) return;
   const l = LAYOUTS[i];
-  LAYOUT = i; BOXES = l.boxes; LADDERS = l.ladders; ZONES = l.zones; SPAWNS = l.spawns; PICKUPS = l.pickups; VEHICLE_SPAWNS = l.vehicles;
+  LAYOUT = i; HALL = l.hall; BOXES = l.boxes; LADDERS = l.ladders; ZONES = l.zones; SPAWNS = l.spawns; PICKUPS = l.pickups; VEHICLE_SPAWNS = l.vehicles;
 }
 
-/** UWB anchors (the efectivo positioning network): along the walls. Visual only. */
-export const ANCHORS: readonly (readonly [number, number])[] = (() => {
-  const a: [number, number][] = [];
-  for (let x = HALL.x0 + 30; x < HALL.x1; x += 60) { a.push([x, HALL.z0 + 0.4]); a.push([x, HALL.z1 - 0.4]); }
-  for (let z = HALL.z0 + 25; z < HALL.z1; z += 60) { a.push([HALL.x0 + 0.4, z]); a.push([HALL.x1 - 0.4, z]); }
-  return a;
-})();
 
-/** Dock doors on the east wall (z centre). Visual only. */
-export const DOCKS: readonly number[] = Array.from({ length: 21 }, (_, i) => -130 + i * 13);

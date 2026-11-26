@@ -10,7 +10,7 @@ a pokoje online obsługuje mały serwer Node.js z WebSocketami. Tryb z botami dz
   - Technik przytrzymuje E przy punkcie A albo B przez 4 sekundy: podłącza serwer albo montuje tagi zegarkowe.
   - Potem trwa 40 sekund uruchamiania. Pracownicy muszą w tym czasie przytrzymać E przy tym punkcie przez 7 sekund,
     żeby wszystko odłączyć. Puszczenie E zaczyna od nowa.
-  - Rundę wygrywa też drużyna, która wyeliminuje całą drugą. Gdy minie 5 minut bez podłączenia, wygrywają pracownicy.
+  - Rundę wygrywa też drużyna, która wyeliminuje całą drugą. Gdy minie czas rundy bez podłączenia, wygrywają pracownicy.
   - W trakcie rundy nikt nie wraca do gry. Wyeliminowany gracz ogląda kolegów z drużyny.
   - Mecz trwa do 4 wygranych rund, a po trzeciej rundzie drużyny zamieniają się rolami.
 - **Dwie misje:**
@@ -20,16 +20,22 @@ a pokoje online obsługuje mały serwer Node.js z WebSocketami. Tryb z botami dz
 - **Odprawa zamiast ekranu ładowania:** przed meczem przewija się historia misji i zadanie twojej drużyny.
 - **Lobby ze slotami:** widać obie drużyny, wybierasz stronę i liczbę botów w każdej. Online mecz ustawia i zaczyna
   gospodarz, czyli pierwsza osoba w hali.
-- **Hala 540 × 290 m (ok. 156 000 m²) w trzech konfiguracjach,** losowanych przy każdym meczu: klasyczna, z regałami
-  buforowymi na środku i lustrzana, po około 300 regałów. Ścianki działowe dzielą środek hali na trzy trasy, a główna
-  alejka jest na środku przegrodzona. Boty-technicy idą jedną z trzech tras, boty-pracownicy trzymają punkty A i B.
-- **Regały snajperskie:** kilka regałów w każdej konfiguracji jest niższych, ma żółtą drabinę i pomost na górze. Na
+- **Dwie mapy do wyboru w lobby:**
+  - *Zajezdnia* (184 × 120 m): zamknięte pomieszczenia połączone bramami, w stylu map z CS. Przez halę centralną
+    biegnie tor z wagonem i suwnica. Punkt A to przeładunek ciężki z dużą skrzynią i antresolą na dwojgu schodów,
+    punkt B to chłodnia z osobnymi komorami. Kontenery, pakownia, warsztat i biura pozwalają obejść halę centralną.
+    Technicy startują w lewym dolnym rogu, pracownicy w prawym dolnym, między nimi są doki z ciężarówką. Runda trwa
+    2,5 minuty.
+  - *Hala magazynowa* (540 × 290 m, ok. 156 000 m²) w trzech konfiguracjach losowanych przy każdym meczu: klasyczna,
+    z regałami buforowymi na środku i lustrzana, po około 300 regałów. Runda trwa 5 minut.
+- **Boty:** technicy idą jedną z trzech tras do punktu wylosowanego na rundę, pracownicy trzymają punkty A i B.
+- **Regały snajperskie (hala magazynowa):** kilka regałów w każdej konfiguracji jest niższych, ma żółtą drabinę i pomost na górze. Na
   pomoście nie ma osłony, skok z góry zabiera zdrowie, a trafiony bot namierza strzelca nawet z daleka.
 - **Lunety pod prawym przyciskiem myszy:** Kartonomiot ma celownik 2×, Paczkownik lunetę 4× i daleki zasięg.
 - **Cztery sloty:** Kartonomiot (serie), Paczkownik (pojedyncze paczki), Paletówka (garść paczek, do znalezienia na
   hali) i kartonowy granat (rzucany łukiem, razi rywali w promieniu 6,5 m). Kartony naprawdę lecą, a zamiast
   wystrzału słychać piknięcie skanera kodów.
-- **Wózki widłowe dla dwóch osób (10 na hali):** pierwszy gracz, który naciśnie E, prowadzi. Drugi wskakuje na tylny
+- **Wózki widłowe dla dwóch osób (10 na hali, 2 w Zajezdni):** pierwszy gracz, który naciśnie E, prowadzi. Drugi wskakuje na tylny
   podest i rzuca. Karoseria osłania nogi, a rzucający stoi odsłonięty.
 - **Mapa Live:** pokazuje twoją drużynę, wózki i cel misji, a rywali tylko wtedy, gdy rzucają.
 - **Wygląd:** interfejs korzysta z design systemu aplikacji efectivo (`efectivo-admin-frontend`).
@@ -48,7 +54,7 @@ Wersja produkcyjna: najpierw `npm run build`, potem `npm start`. To uruchamia se
 (ustawiasz go zmienną `EF_PORT`). Znajomi wchodzą do tej samej hali przez link z parametrem `?hala=KOD`.
 
 Testy: `npm test` uruchamia typecheck oraz test bez grafiki. Ten test sprawdza:
-- czy w każdej z trzech konfiguracji spawny, znajdźki i obiekty misji są osiągalne,
+- czy na każdej mapie (Zajezdnia i trzy konfiguracje hali) spawny, znajdźki i obiekty misji są osiągalne,
 - czy całe mecze samych botów kończą się wynikiem do 4 rund i nie ma ognia w swoich,
 - zasady lobby (tylko gospodarz ustawia i zaczyna, najwyżej 20 osób w drużynie),
 - wózek widłowy, wejście na pomost, podłączanie i odłączanie serwera oraz granat.
