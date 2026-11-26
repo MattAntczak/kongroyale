@@ -4,6 +4,7 @@
 
 import { BOXES, HALL, ZONES } from "../shared/map";
 import type { PlayerSnap } from "../shared/proto";
+import type { VehicleState } from "../shared/vehicle";
 
 const W = 544, H = 340;
 const sx = W / (HALL.x1 - HALL.x0), sz = H / (HALL.z1 - HALL.z0);
@@ -31,9 +32,16 @@ function drawBase(): HTMLCanvasElement {
 
 const TEAM_RGB = ["71,79,255", "255,106,0"];
 
-export function drawMinimap(ctx: CanvasRenderingContext2D, players: PlayerSnap[], myId: number, myTeam: number, me: { x: number; z: number; yaw: number }, geo: boolean, t: number) {
+export function drawMinimap(ctx: CanvasRenderingContext2D, players: PlayerSnap[], vehicles: VehicleState[], myId: number, myTeam: number, me: { x: number; z: number; yaw: number }, geo: boolean, t: number) {
   if (!base) base = drawBase();
   ctx.drawImage(base, 0, 0);
+  // forklifts: small dark bodies, like the vehicle markers on the Live map
+  for (const v of vehicles) {
+    ctx.save(); ctx.translate(X(v.x), Z(v.z)); ctx.rotate(-v.yaw);
+    ctx.fillStyle = "#1e293b"; ctx.beginPath(); ctx.roundRect(-2.6 * sx / 2, -1.3 * sz / 2, 2.6 * sx, 1.3 * sz, 3); ctx.fill();
+    ctx.fillStyle = "#f59e0b"; ctx.fillRect(2.6 * sx / 2 - 3, -1.3 * sz / 2 + 2, 3, 1.3 * sz - 4);
+    ctx.restore();
+  }
   for (const p of players) {
     if (p.id === myId || !p.alive) continue;
     if (p.tm === myTeam) {

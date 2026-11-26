@@ -6,6 +6,7 @@ import { LocalLink, WsLink } from "./net";
 import { initAudio } from "./audio";
 import { Sim } from "../shared/sim";
 import { BOXES, HALL, ZONES } from "../shared/map";
+import { findPath } from "../shared/nav";
 import { TEAM_CSS } from "./human";
 import type { Difficulty } from "../shared/proto";
 
@@ -135,4 +136,5 @@ function startPreview() {
 function stopPreview() { cancelAnimationFrame(previewRaf); previewSim = null; }
 
 startPreview();
-(window as unknown as { __ef: unknown }).__ef = { get game() { return game; } };
+// a handle for scripted checks (tools drive the game through it)
+(window as unknown as { __ef: unknown }).__ef = { get game() { return game; }, findPath };

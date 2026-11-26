@@ -380,8 +380,6 @@ export function buildWorld(scene: THREE.Scene): WorldHandle {
     for (let i = 0; i < 6; i++) pick(loads).add(b.x0 + 0.4 + (i % 3) * 1.25, 0, b.z0 + 0.45 + Math.floor(i / 3) * 0.55, 0.7, 0.5 + Math.random() * 0.8, 0.45);
   }
 
-  // forklifts
-  for (const b of BOXES) if (b.kind === "forklift") group.add(forklift(b));
 
   // UWB anchors with a pulsing accent LED
   const ledMat = new THREE.MeshBasicMaterial({ color: ACCENT });
@@ -416,7 +414,11 @@ export function buildWorld(scene: THREE.Scene): WorldHandle {
   };
 }
 
-function forklift(b: Box): THREE.Group {
+/**
+ * A drivable forklift, built around its centre with the forks toward +X (shared/vehicle.ts): body, counterweight,
+ * driver's seat under the roof frame, mast and forks, and a rear platform for the thrower to stand on.
+ */
+export function forkliftModel(): THREE.Group {
   const g = new THREE.Group();
   const yellow = new THREE.MeshStandardMaterial({ color: 0xf2b705, roughness: 0.45, metalness: 0.2 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x1b1c20, roughness: 0.6, metalness: 0.4 });
@@ -434,8 +436,11 @@ function forklift(b: Box): THREE.Group {
   for (const [x, z] of [[-0.7, -0.6], [-0.7, 0.6], [0.4, -0.6], [0.4, 0.6]]) add(wheel, tyre, x, 0.3, z);
   const beacon = add(new THREE.SphereGeometry(0.08, 10, 8), new THREE.MeshBasicMaterial({ color: 0xf59e0b }), -0.6, 2.38, 0);
   beacon.castShadow = false;
-  g.position.set((b.x0 + b.x1) / 2, 0, (b.z0 + b.z1) / 2);
-  g.rotation.y = b.rot ?? 0;
+  // the thrower's platform with a hand rail
+  add(new THREE.BoxGeometry(0.6, 0.08, 1.1), new THREE.MeshStandardMaterial({ map: stripeTexture(), roughness: 0.6 }), -1.25, 1.41, 0);
+  add(new THREE.BoxGeometry(0.3, 0.25, 0.9), dark, -1.25, 1.27, 0); // riser on the counterweight
+  for (const z of [-0.5, 0.5]) add(new THREE.BoxGeometry(0.04, 0.6, 0.04), dark, -1.52, 1.75, z);
+  add(new THREE.BoxGeometry(0.04, 0.04, 1.04), dark, -1.52, 2.05, 0);
   return g;
 }
 const steelFork = new THREE.MeshStandardMaterial({ color: 0x6b6f77, metalness: 0.8, roughness: 0.35 });

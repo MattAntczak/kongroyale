@@ -69,6 +69,12 @@ export function shot(w: WeaponId, dist = 0) {
   noise(t, 0.07, 260, 0.9, 0.35 * att, "lowpass", 0.07);
 }
 
+/** The forklift's reversing beep. */
+export function reverseBeep() {
+  if (!ctx) return;
+  tone(ctx.currentTime, 1050, 1050, 0.3, 0.06, "square");
+}
+
 export function hitMarker(head: boolean) {
   if (!ctx) return;
   const t = ctx.currentTime;

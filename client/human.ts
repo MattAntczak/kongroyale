@@ -130,7 +130,7 @@ export class Human {
   }
 
   /** Place and animate. yaw 0 faces −Z. */
-  update(x: number, y: number, z: number, yaw: number, pitch: number, alive: boolean, dt: number, showLabel: boolean) {
+  update(x: number, y: number, z: number, yaw: number, pitch: number, alive: boolean, dt: number, showLabel: boolean, sit = false) {
     const moved = Math.hypot(x - this.lastX, z - this.lastZ);
     this.lastX = x; this.lastZ = z;
     const sp = dt > 0 ? Math.min(10, moved / dt) : 0;
@@ -139,7 +139,7 @@ export class Human {
     this.root.rotation.y = yaw;
     this.phase += dt * this.speed * 1.9;
     const swing = Math.sin(this.phase) * Math.min(0.75, this.speed * 0.11);
-    this.legL.rotation.x = swing; this.legR.rotation.x = -swing;
+    this.legL.rotation.x = sit ? 1.45 : swing; this.legR.rotation.x = sit ? 1.45 : -swing;
     // arms hold the gun up toward the aim
     const aim = Math.PI / 2 + pitch;
     this.armR.rotation.set(aim, 0, 0);

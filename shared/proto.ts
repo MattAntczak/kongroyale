@@ -13,20 +13,35 @@ export type ClientMsg =
   | { t: "shoot"; w: WeaponId; yaw: number; pitch: number; dirs: number[]; view: number }
   | { t: "reload" }
   | { t: "switch"; w: WeaponId }
-  | { t: "chat"; text: string };
+  | { t: "chat"; text: string }
+  /** E: get on the nearest forklift, or off the one we ride. */
+  | { t: "use" }
+  /** The driver's predicted forklift pose; `rev` is the last revision the host sent. */
+  | { t: "drive"; x: number; z: number; yaw: number; speed: number; rev: number };
 
 export interface PlayerSnap {
   id: number; n: string; bot: boolean; c: number;
   /** 0 = Grupa A, 1 = Grupa B. */
   tm: number;
+  /** Forklift ridden (-1 on foot) and seat (0 driver, 1 thrower). */
+  veh: number; seat: number;
   x: number; y: number; z: number; yaw: number; pitch: number;
   hp: number; alive: boolean; w: WeaponId; k: number; d: number;
   /** Seconds since this player last fired (shows them on the Live map). */
   fired: number;
 }
 
+export interface VehicleSnap {
+  id: number; x: number; z: number; yaw: number; speed: number;
+  /** Driver and thrower ids, 0 when the seat is empty. */
+  d: number; g: number;
+}
+
 export interface SelfSnap {
   hp: number; alive: boolean; w: WeaponId; team: number;
+  veh: number; seat: number;
+  /** Revision of our forklift's pose: when it changes, the driver takes the host's pose. */
+  vrev: number;
   mag: Record<WeaponId, number>; res: Record<WeaponId, number>; owned: WeaponId[];
   /** Bumped every respawn and every forced correction: the client takes the host's position when it changes. */
   spawn: number; x: number; y: number; z: number; yaw: number;
@@ -38,6 +53,7 @@ export type Ev =
   | { k: "hit"; by: number; on: number; dmg: number; head: boolean; x: number; y: number; z: number }
   | { k: "kill"; by: number; on: number; w: WeaponId; head: boolean }
   | { k: "pick"; id: number; p: number; kind: PickupKind }
+  | { k: "ride"; id: number; /** -1 = got off */ veh: number; seat: number }
   | { k: "join"; name: string }
   | { k: "leave"; name: string }
   | { k: "chat"; name: string; text: string }
@@ -47,6 +63,6 @@ export type Ev =
 // host -> client
 export type HostMsg =
   | { t: "welcome"; id: number; room: string; fragLimit: number }
-  | { t: "snap"; time: number; phase: "play" | "end"; left: number; /** Team eliminations [Grupa A, Grupa B]. */ score: [number, number]; players: PlayerSnap[]; pickups: boolean[]; me: SelfSnap }
+  | { t: "snap"; time: number; phase: "play" | "end"; left: number; /** Team eliminations [Grupa A, Grupa B]. */ score: [number, number]; players: PlayerSnap[]; vehicles: VehicleSnap[]; pickups: boolean[]; me: SelfSnap }
   | { t: "ev"; evs: Ev[] }
   | { t: "error"; text: string };

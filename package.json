@@ -15,7 +15,8 @@
     "start": "EF_SERVE=1 tsx server.ts",
     "typecheck": "tsc --noEmit",
     "smoke": "tsx smoke.ts",
-    "test": "tsc --noEmit && tsx smoke.ts"
+    "test": "tsc --noEmit && tsx smoke.ts",
+    "check:online": "tsx online-check.ts"
   },
   "dependencies": {
     "three": "0.186.0",

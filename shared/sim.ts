@@ -6,8 +6,9 @@
 // the walls and a speed limit and sends a correction when one fails. Shots are decided here: each one launches real
 // cardboard boxes that fly tick by tick, and a box tests players where the shooter saw them (up to 300 ms back).
 
-import { BOXES, PICKUPS, SPAWNS, HALL, type PickupKind } from "./map";
-import { EYE_H, PLAYER_H, SPRINT_SPEED, blocked, lineOfSight, rayPlayer, rayWorld, stepBody, viewDir, type Body } from "./physics";
+import { BOXES, PICKUPS, SPAWNS, HALL, VEHICLE_SPAWNS, type Box as HallBox, type PickupKind } from "./map";
+import { SEATS, VEH_MAX_SPEED, VEH_USE_R, seatPos, stepVehicle, vehicleBlocked, vehicleBox, type VehicleState } from "./vehicle";
+import { EYE_H, PLAYER_H, SPRINT_SPEED, blocked, lineOfSight, rayPlayer, rayWorld, setDynamicBoxes, stepBody, viewDir, type Body } from "./physics";
 import { BOX_GRAVITY, BOX_LIFE_S, WEAPONS, falloff, type WeaponId } from "./weapons";
 import { findPath, freeAt, randomFree, walkable } from "./nav";
 import type { ClientMsg, Difficulty, Ev, HostMsg, PlayerSnap, SelfSnap } from "./proto";
@@ -25,6 +26,7 @@ export const GEO_S = 10;
 export const MAX_REWIND_S = 0.3;
 const HIST = 48;
 const leadPos = [0, 0, 0];
+const tmpSeat = [0, 0, 0];
 
 const BOT_NAMES = ["Zenek", "Halina", "Mirek", "Grażyna", "Waldek", "Bożena", "Rysiek", "Danuta", "Kazik", "Wiesia", "Janusz", "Krystyna"];
 const PICKUP_RESPAWN_S: Record<PickupKind, number> = { med: 20, ammo: 15, shotgun: 25, geo: 45 };
@@ -77,6 +79,17 @@ interface Player {
   lastStateT: number;
   hist: Float64Array; histN: number;
   brain: Brain | null;
+  /** The forklift this player rides (-1 on foot) and the seat: 0 drives, 1 throws from the rear platform. */
+  veh: number; seat: number;
+}
+
+interface Forklift {
+  id: number; st: VehicleState;
+  /** Riders by seat (driver, thrower). */
+  riders: [Player | null, Player | null];
+  /** Bumped when the host overrules the driver's pose: the driver then takes the host's. */
+  rev: number;
+  lastDriveT: number;
 }
 
 /** A cardboard box in flight. */
@@ -100,6 +113,8 @@ export class Sim {
   private nextId = 1;
   private evs: Ev[] = [];
   private boxes: Box[] = [];
+  private forklifts: Forklift[] = VEHICLE_SPAWNS.map((s, i) => ({ id: i, st: { x: s.x, z: s.z, yaw: s.yaw, speed: 0 }, riders: [null, null], rev: 0, lastDriveT: 0 }));
+  private dynBoxes: HallBox[] = VEHICLE_SPAWNS.map(() => ({ kind: "forklift", x0: 0, x1: 0, y0: 0, y1: 0, z0: 0, z1: 0 }));
   private pickups = PICKUPS.map((spot) => ({ spot, readyAt: 0 }));
   private rand: () => number;
   private colorSeq = 0;
@@ -124,6 +139,7 @@ export class Sim {
       w: "rifle", mag: { rifle: 0, pistol: 0, shotgun: 0 }, res: { rifle: 0, pistol: 0, shotgun: 0 }, owned: new Set(),
       fireReady: 0, lastFire: -99, reloadUntil: 0, k: 0, d: 0, spawn: 0, protectUntil: 0, geoUntil: 0, lastStateT: 0,
       hist: new Float64Array(HIST * 4), histN: 0,
+      veh: -1, seat: 0,
       brain: bot ? {
         path: null, pi: 0, goalX: 0, goalZ: 0, repathAt: 0, target: 0, reactAt: 0, strafe: 1, strafeUntil: 0,
         errYaw: 0, errPitch: 0, errUntil: 0, nextThink: 0, seenX: 0, seenZ: 0, seenT: -99, lastX: 0, lastZ: 0, stuckCheck: 0,
@@ -179,6 +195,7 @@ export class Sim {
   removePlayer(id: number) {
     const p = this.players.get(id);
     if (!p) return;
+    this.leaveForklift(p, false);
     this.players.delete(id);
     this.boxes = this.boxes.filter((b) => b.owner !== p);
     this.evs.push({ k: "leave", name: p.name });
@@ -197,6 +214,8 @@ export class Sim {
       case "shoot": this.onShoot(p, m); break;
       case "reload": this.startReload(p); break;
       case "switch": if (p.owned.has(m.w) && p.w !== m.w) { p.w = m.w; p.reloadUntil = 0; p.fireReady = Math.max(p.fireReady, this.time + 0.25); } break;
+      case "use": this.useForklift(p); break;
+      case "drive": this.onDrive(p, m); break;
       case "chat": { const text = String(m.text).slice(0, 120).trim(); if (text) this.evs.push({ k: "chat", name: p.name, text }); break; }
     }
   }
@@ -207,6 +226,7 @@ export class Sim {
     p.yaw = m.yaw;
     p.pitch = Math.max(-1.5, Math.min(1.5, m.pitch));
     p.moving = !!m.moving;
+    if (p.veh >= 0) return; // riders go where the forklift goes
     const dt = Math.max(0.016, Math.min(0.5, this.time - p.lastStateT));
     p.lastStateT = this.time;
     const b = p.body;
@@ -214,10 +234,95 @@ export class Sim {
     const okSpeed = dh <= SPRINT_SPEED * 1.4 * dt + 0.6;
     const okY = m.y >= -0.01 && m.y <= HALL.h && m.y - b.y <= 1.6 * Math.max(dt, 0.1) * 8;
     const inside = m.x > HALL.x0 && m.x < HALL.x1 && m.z > HALL.z0 && m.z < HALL.z1;
-    if (okSpeed && okY && inside && !blocked(m.x, m.y + 0.01, m.z)) {
+    // forklifts are left out: the client saw them a moment ago, the host sees them now
+    if (okSpeed && okY && inside && !blocked(m.x, m.y + 0.01, m.z, false)) {
       b.x = m.x; b.y = m.y; b.z = m.z;
     } else {
       p.spawn++; // the client snaps back to the host's position
+    }
+  }
+
+  // ---------------------------------------------------------------- forklifts
+
+  /** E near a forklift: take the driver's seat, or the thrower's if someone drives; E on board: get off. */
+  private useForklift(p: Player) {
+    if (!p.alive || this.phase !== "play") return;
+    if (p.veh >= 0) { this.leaveForklift(p, true); return; }
+    let best: Forklift | null = null, bd = VEH_USE_R;
+    for (const f of this.forklifts) {
+      const d = Math.hypot(f.st.x - p.body.x, f.st.z - p.body.z);
+      if (d < bd && (!f.riders[0] || !f.riders[1])) {
+        // a forklift belongs to whichever group gets on first
+        const other = f.riders[0] ?? f.riders[1];
+        if (other && other.team !== p.team) continue;
+        bd = d; best = f;
+      }
+    }
+    if (!best) return;
+    const seat = best.riders[0] ? 1 : 0;
+    best.riders[seat] = p;
+    p.veh = best.id; p.seat = seat; p.reloadUntil = 0;
+    if (seat === 0) { best.lastDriveT = this.time; best.rev++; }
+    p.spawn++;
+    this.placeRider(p, best);
+    this.evs.push({ k: "ride", id: p.id, veh: best.id, seat });
+  }
+
+  private leaveForklift(p: Player, place: boolean) {
+    if (p.veh < 0) return;
+    const f = this.forklifts[p.veh];
+    if (f.riders[p.seat] === p) f.riders[p.seat] = null;
+    p.veh = -1;
+    if (!place) return;
+    // step off beside it: left, right, behind, in front; the first free spot
+    const fx = Math.cos(f.st.yaw), fz = -Math.sin(f.st.yaw);
+    for (const [ax, az] of [[0, 1.4], [0, -1.4], [-2.2, 0], [2.4, 0], [0, 2.2], [0, -2.2]]) {
+      const x = f.st.x + fx * ax - fz * az, z = f.st.z + fz * ax + fx * az;
+      if (x > HALL.x0 + 0.4 && x < HALL.x1 - 0.4 && z > HALL.z0 + 0.4 && z < HALL.z1 - 0.4 && !blocked(x, 0.01, z, false)) {
+        p.body.x = x; p.body.y = 0; p.body.z = z; break;
+      }
+    }
+    p.body.vx = p.body.vy = p.body.vz = 0; p.body.onGround = true;
+    p.spawn++;
+    this.evs.push({ k: "ride", id: p.id, veh: -1, seat: 0 });
+  }
+
+  private placeRider(p: Player, f: Forklift) {
+    seatPos(f.st, p.seat, tmpSeat);
+    p.body.x = tmpSeat[0]; p.body.y = tmpSeat[1]; p.body.z = tmpSeat[2];
+    p.body.vx = p.body.vy = p.body.vz = 0;
+  }
+
+  /** The driver's predicted pose: accepted when it is a plausible drive from the last one. */
+  private onDrive(p: Player, m: Extract<ClientMsg, { t: "drive" }>) {
+    if (p.veh < 0 || p.seat !== 0 || !p.alive) return;
+    const f = this.forklifts[p.veh];
+    if (m.rev !== f.rev) return;
+    if (![m.x, m.z, m.yaw, m.speed].every(Number.isFinite)) return;
+    const dt = Math.max(0.016, Math.min(0.5, this.time - f.lastDriveT));
+    f.lastDriveT = this.time;
+    const next = { x: m.x, z: m.z, yaw: m.yaw, speed: Math.max(-VEH_MAX_SPEED, Math.min(VEH_MAX_SPEED, m.speed)) };
+    const ok = Math.hypot(m.x - f.st.x, m.z - f.st.z) <= VEH_MAX_SPEED * 1.4 * dt + 0.6 && !vehicleBlocked(next)
+      && m.x > HALL.x0 && m.x < HALL.x1 && m.z > HALL.z0 && m.z < HALL.z1;
+    if (ok) f.st = next; else f.rev++;
+  }
+
+  private stepForklifts(dt: number) {
+    const states = this.forklifts.map((f) => f.st);
+    for (const f of this.forklifts) {
+      // a driven forklift moves by its driver's reports; an empty one rolls to a stop
+      if (!f.riders[0]) stepVehicle(f.st, 0, 0, dt, states);
+      vehicleBox(f.st, this.dynBoxes[f.id]);
+      for (const r of f.riders) if (r) this.placeRider(r, f);
+    }
+    setDynamicBoxes(this.dynBoxes);
+  }
+
+  private resetForklifts() {
+    for (const f of this.forklifts) {
+      for (const r of f.riders) if (r) this.leaveForklift(r, true);
+      const s = VEHICLE_SPAWNS[f.id];
+      f.st = { x: s.x, z: s.z, yaw: s.yaw, speed: 0 }; f.rev++;
     }
   }
 
@@ -260,6 +365,7 @@ export class Sim {
   private fire(p: Player, yaw: number, pitch: number, dirs: number[], viewT: number, slack: number) {
     const w = WEAPONS[p.w];
     if (!p.alive || this.phase !== "play" || !p.owned.has(p.w) || p.reloadUntil) return;
+    if (p.veh >= 0 && p.seat === 0) return; // the driver drives
     if (p.mag[p.w] <= 0 || this.time < p.fireReady - slack) return;
     if (dirs.length !== w.pellets * 3) return;
     p.fireReady = Math.max(this.time, p.fireReady) + 60 / w.rpm;
@@ -318,6 +424,7 @@ export class Sim {
     this.evs.push({ k: "hit", by: by.id, on: q.id, dmg, head, x: +x.toFixed(2), y: +y.toFixed(2), z: +z.toFixed(2) });
     if (q.brain && q.brain.target === 0) { q.brain.seenX = by.body.x; q.brain.seenZ = by.body.z; q.brain.seenT = this.time; }
     if (q.hp > 0) return;
+    this.leaveForklift(q, false);
     q.hp = 0; q.alive = false; q.d++; q.respawnAt = this.time + RESPAWN_S; q.killedBy = by.name; q.reloadUntil = 0;
     if (by !== q) { by.k++; this.score[by.team]++; }
     this.evs.push({ k: "kill", by: by.id, on: q.id, w, head });
@@ -339,6 +446,7 @@ export class Sim {
     this.matchEndT = this.time + TIME_LIMIT_S;
     this.score[0] = 0; this.score[1] = 0;
     this.boxes.length = 0;
+    this.resetForklifts();
     for (const p of this.players.values()) { p.k = 0; p.d = 0; this.respawn(p); }
     for (const pk of this.pickups) pk.readyAt = 0;
     this.evs.push({ k: "start" });
@@ -357,6 +465,7 @@ export class Sim {
     p.body.x = s.x; p.body.y = 0; p.body.z = s.z; p.body.vx = p.body.vy = p.body.vz = 0; p.body.onGround = true;
     p.yaw = Math.atan2(s.x, s.z); // face the middle of the hall
     p.pitch = 0;
+    this.leaveForklift(p, false);
     p.hp = 100; p.alive = true; p.killedBy = "";
     p.owned = new Set<WeaponId>(["rifle", "pistol"]);
     p.w = "rifle";
@@ -372,6 +481,7 @@ export class Sim {
 
   step(dt: number) {
     this.time += dt;
+    this.stepForklifts(dt);
     if (this.phase === "end") {
       if (this.time >= this.endAt) this.restart();
     } else if (this.time >= this.matchEndT) this.endMatch();
@@ -567,7 +677,7 @@ export class Sim {
       const list: PlayerSnap[] = [];
       for (const p of this.players.values()) {
         list.push({
-          id: p.id, n: p.name, bot: p.bot, c: p.color, tm: p.team,
+          id: p.id, n: p.name, bot: p.bot, c: p.color, tm: p.team, veh: p.veh, seat: p.seat,
           x: +p.body.x.toFixed(3), y: +p.body.y.toFixed(3), z: +p.body.z.toFixed(3), yaw: +p.yaw.toFixed(3), pitch: +p.pitch.toFixed(3),
           hp: p.hp, alive: p.alive, w: p.w, k: p.k, d: p.d, fired: +Math.min(99, this.time - p.lastFire).toFixed(2),
         });
@@ -577,13 +687,15 @@ export class Sim {
     const self: SelfSnap = {
       hp: me.hp, alive: me.alive, w: me.w, team: me.team, mag: { ...me.mag }, res: { ...me.res }, owned: [...me.owned],
       spawn: me.spawn, x: me.body.x, y: me.body.y, z: me.body.z, yaw: me.yaw,
+      veh: me.veh, seat: me.seat, vrev: me.veh >= 0 ? this.forklifts[me.veh].rev : 0,
       reloading: !!me.reloadUntil, respawnIn: me.alive ? 0 : Math.max(0, me.respawnAt - this.time),
       geo: Math.max(0, me.geoUntil - this.time), killedBy: me.killedBy,
     };
     return {
       t: "snap", time: +this.time.toFixed(3), phase: this.phase,
       left: this.phase === "end" ? Math.max(0, this.endAt - this.time) : Math.max(0, this.matchEndT - this.time),
-      score: [this.score[0], this.score[1]], players: this.snapCache.list, pickups: this.pickups.map((pk) => this.time >= pk.readyAt), me: self,
+      score: [this.score[0], this.score[1]], players: this.snapCache.list,
+      vehicles: this.forklifts.map((f) => ({ id: f.id, x: +f.st.x.toFixed(3), z: +f.st.z.toFixed(3), yaw: +f.st.yaw.toFixed(4), speed: +f.st.speed.toFixed(2), d: f.riders[0]?.id ?? 0, g: f.riders[1]?.id ?? 0 })), pickups: this.pickups.map((pk) => this.time >= pk.readyAt), me: self,
     };
   }
 }

@@ -10,5 +10,5 @@
     "types": ["vite/client", "node"],
     "noEmit": true
   },
-  "include": ["client", "shared", "server.ts", "smoke.ts", "vite.config.ts"]
+  "include": ["client", "shared", "server.ts", "smoke.ts", "online-check.ts", "vite.config.ts"]
 }

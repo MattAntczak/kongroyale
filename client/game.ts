@@ -6,8 +6,11 @@ import * as THREE from "three";
 import { EYE_H, rayPlayer, rayWorld, stepBody, viewDir, type Body } from "../shared/physics";
 import { WEAPONS, WEAPON_ORDER, type WeaponId } from "../shared/weapons";
 import { spreadDirs } from "../shared/sim";
-import type { Ev, HostMsg, PlayerSnap } from "../shared/proto";
-import { buildWorld, type WorldHandle } from "./world";
+import type { Ev, HostMsg, PlayerSnap, VehicleSnap } from "../shared/proto";
+import { VEH_USE_R, seatPos, stepVehicle, vehicleBox as vehicleBoxInto, type VehicleState } from "../shared/vehicle";
+import { setDynamicBoxes } from "../shared/physics";
+import type { Box } from "../shared/map";
+import { buildWorld, forkliftModel, type WorldHandle } from "./world";
 import { Human, TEAM_COLORS, TEAM_CSS, gunModel } from "./human";
 import { TEAM_FRAG_LIMIT, TEAM_NAMES } from "../shared/sim";
 import { Fx } from "./fx";
@@ -27,7 +30,7 @@ export function loadSettings(): Settings {
 }
 function saveSettings(s: Settings) { try { localStorage.setItem("efectivo.settings", JSON.stringify(s)); } catch { /* private mode */ } }
 
-interface Snap { time: number; players: Map<number, PlayerSnap> }
+interface Snap { time: number; players: Map<number, PlayerSnap>; vehicles: VehicleSnap[] }
 
 const PICK_TEXT = { med: "Apteczka · +50 zdrowia", ammo: "Zapas paczek uzupełniony", shotgun: "Paletówka w ręku · klawisz 3", geo: "efectivo GEO · widzisz wszystkich przez 10 s" } as const;
 
@@ -51,6 +54,17 @@ export class Game {
   private latest: Extract<HostMsg, { t: "snap" }> | null = null;
   private names = new Map<number, PlayerSnap>();
   private myId = 0;
+  /** The forklift we ride (-1 on foot), our seat, and, when we drive it, our predicted pose of it. */
+  private veh = -1; private seat = 0; private vrev = -1;
+  private drive: VehicleState = { x: 0, z: 0, yaw: 0, speed: 0 };
+  private camOffset = 0;
+  private forklifts = new Map<number, THREE.Group>();
+  private vehPoses = new Map<number, VehicleState>();
+  private dynBoxes: Box[] = [];
+  private beepT = 0;
+  private seatTmp = [0, 0, 0];
+  /** Our own worker, drawn only while we drive (the chase camera sees us). */
+  private selfHuman: Human | null = null;
   private myTeam = -1;
   private announced = false;
   private endMvp = "";
@@ -173,6 +187,7 @@ export class Game {
       // Chrome sometimes reports one huge jump right after the pointer is captured; drop it
       if (Math.abs(e.movementX) > 400 || Math.abs(e.movementY) > 400) return;
       const k = 0.0022 * this.settings.sens;
+      if (this.veh >= 0 && this.seat === 0) { this.camOffset -= e.movementX * k; this.pitch = Math.max(-0.6, Math.min(0.5, this.pitch - e.movementY * k)); return; }
       this.yaw -= e.movementX * k;
       this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch - e.movementY * k));
     });
@@ -185,6 +200,7 @@ export class Game {
       if (!this.locked) return;
       this.keys.add(e.code);
       if (e.code === "KeyR") this.reload();
+      if (e.code === "KeyE") this.link.send({ t: "use" });
       if (e.code === "Digit1") this.switchTo("rifle");
       if (e.code === "Digit2") this.switchTo("pistol");
       if (e.code === "Digit3") this.switchTo("shotgun");
@@ -318,7 +334,7 @@ export class Game {
     const players = new Map<number, PlayerSnap>();
     for (const p of m.players) players.set(p.id, p);
     this.names = players;
-    this.snaps.push({ time: m.time, players });
+    this.snaps.push({ time: m.time, players, vehicles: m.vehicles });
     while (this.snaps.length > 30) this.snaps.shift();
     const prevPhase = this.latest?.phase;
     this.latest = m;
@@ -333,6 +349,15 @@ export class Game {
     }
     this.alive = me.alive;
     this.owned = new Set(me.owned);
+    // forklift: on getting into the driver's seat, or when the host overrules our driving, take its pose
+    if (me.veh !== this.veh || me.seat !== this.seat || (me.veh >= 0 && me.seat === 0 && me.vrev !== this.vrev)) {
+      const v = m.vehicles.find((q) => q.id === me.veh);
+      const newlyDriving = me.veh >= 0 && me.seat === 0 && (this.veh !== me.veh || this.seat !== 0);
+      if (v) { this.drive.x = v.x; this.drive.z = v.z; this.drive.yaw = v.yaw; this.drive.speed = newlyDriving ? 0 : v.speed; }
+      if (newlyDriving) { this.camOffset = 0; this.toast("Jedziesz: W/S gaz i wsteczny, A/D skręt, E wysiada"); }
+      else if (me.veh >= 0 && me.seat === 1 && this.veh !== me.veh) this.toast("Rzucasz z wózka · E wysiada");
+      this.veh = me.veh; this.seat = me.seat; this.vrev = me.vrev;
+    }
     if (this.myTeam !== me.team) {
       // our group decides every teammate's tag colour, so rebuild the others when it changes
       this.myTeam = me.team;
@@ -459,17 +484,35 @@ export class Game {
     const f = viewDir(this.yaw, 0), r = [Math.cos(this.yaw), 0, -Math.sin(this.yaw)];
     const fw = (this.keys.has("KeyW") ? 1 : 0) - (this.keys.has("KeyS") ? 1 : 0);
     const st = (this.keys.has("KeyD") ? 1 : 0) - (this.keys.has("KeyA") ? 1 : 0);
-    const canMove = this.alive && this.latest?.phase === "play";
+    const riding = this.veh >= 0 && this.alive;
+    const driving = riding && this.seat === 0;
+    const canMove = this.alive && this.latest?.phase === "play" && !riding;
     const inp = {
       mx: canMove ? f[0] * fw + r[0] * st : 0, mz: canMove ? f[2] * fw + r[2] * st : 0,
       jump: canMove && this.keys.has("Space"), sprint: this.keys.has("ShiftLeft") && fw > 0,
     };
     this.acc += dt;
-    while (this.acc >= 1 / 60) { this.acc -= 1 / 60; if (this.alive) stepBody(this.body, inp, 1 / 60); }
+    // forklifts first: where they are decides what we bump into this frame
+    const renderT = this.serverNow() - INTERP_S;
+    const [a, b] = this.bracket(renderT);
+    this.updateForklifts(a, b, renderT);
+    const throttle = driving && this.latest?.phase === "play" ? fw : 0, steer = driving ? -st : 0;
+    while (this.acc >= 1 / 60) {
+      this.acc -= 1 / 60;
+      if (driving) stepVehicle(this.drive, throttle, steer, 1 / 60, [...this.vehPoses.values()].filter((v) => v !== this.vehPoses.get(this.veh)));
+      else if (this.alive && !riding) stepBody(this.body, inp, 1 / 60);
+    }
+    if (riding) {
+      const pose = driving ? this.drive : this.vehPoses.get(this.veh);
+      if (pose) { seatPos(pose, this.seat, this.seatTmp); this.body.x = this.seatTmp[0]; this.body.y = this.seatTmp[1]; this.body.z = this.seatTmp[2]; }
+      this.body.vx = this.body.vz = 0; this.body.onGround = true;
+    }
+    if (driving && this.drive.speed < -0.3) { this.beepT -= dt; if (this.beepT <= 0) { this.beepT = 0.7; sfx.reverseBeep(); } }
     this.sendAcc += dt;
     if (this.sendAcc >= 1 / STATE_HZ && this.myId) {
       this.sendAcc = 0;
       if (this.alive) this.link.send({ t: "state", x: this.body.x, y: this.body.y, z: this.body.z, yaw: this.yaw, pitch: this.pitch, moving: Math.hypot(this.body.vx, this.body.vz) > 1, spawn: this.spawn });
+      if (driving) this.link.send({ t: "drive", x: this.drive.x, z: this.drive.z, yaw: this.drive.yaw, speed: this.drive.speed, rev: this.vrev });
     }
     if (this.reloadUntil && nowS >= this.reloadUntil) {
       const w = WEAPONS[this.w], take = Math.min(w.mag - this.mag[this.w], this.res[this.w]);
@@ -478,8 +521,6 @@ export class Game {
     this.tryFire();
 
     // others, interpolated
-    const renderT = this.serverNow() - INTERP_S;
-    const [a, b] = this.bracket(renderT);
     const seen = new Set<number>();
     if (b) {
       for (const [id, pb] of b.players) {
@@ -497,7 +538,11 @@ export class Game {
         }
         h.setWeapon(pb.w);
         const d = Math.hypot(x - this.body.x, z - this.body.z);
-        h.update(x, y, z, yaw, pitch, pb.alive, dt, h.ally ? d < 80 : d < 25);
+        // a driver faces where the forklift faces, sitting; a thrower stands and aims freely
+        const ride = pb.veh >= 0 ? this.vehPoses.get(pb.veh) : undefined;
+        if (ride && pb.seat === 0) yaw = ride.yaw - Math.PI / 2;
+        const mate = riding && pb.veh === this.veh; // no name tag in the face of whoever rides with us
+        h.update(x, y, z, yaw, pitch, pb.alive, dt, !mate && (h.ally ? d < 80 : d < 25), !!ride && pb.seat === 0);
         if (pb.alive && d < 14 && Math.hypot(x - h.root.position.x, z - h.root.position.z) >= 0) { /* footsteps below */ }
       }
     }
@@ -519,11 +564,33 @@ export class Game {
     this.camera.rotation.y = this.yaw + (Math.random() - 0.5) * this.shake * 0.01;
     this.camera.rotation.x = (this.alive ? this.pitch : -0.35) + (Math.random() - 0.5) * this.shake * 0.01;
     this.camera.rotation.z = this.alive ? 0 : 0.35;
+    if (driving) {
+      // the driver watches the forklift from behind; the mouse swings the view and it settles back
+      this.camOffset *= Math.max(0, 1 - dt * 1.5);
+      const cy = this.drive.yaw - Math.PI / 2 + this.camOffset;
+      const back = 6.2, up = 3.4 - this.pitch * 3;
+      const cx = this.drive.x + Math.sin(cy) * back, cz = this.drive.z + Math.cos(cy) * back;
+      const t = Math.min(1, 1 - this.wallHit(this.drive.x, 1.6, this.drive.z, cx, up, cz));
+      this.camera.position.set(this.drive.x + (cx - this.drive.x) * t, 1.6 + (up - 1.6) * t, this.drive.z + (cz - this.drive.z) * t);
+      this.camera.lookAt(this.drive.x, 1.5, this.drive.z);
+      this.yaw = cy;
+    }
+    if (driving && !this.selfHuman) {
+      const me = this.names.get(this.myId);
+      this.selfHuman = new Human(me?.n ?? "", me?.c ?? 0, false, this.myTeam, true);
+      this.selfHuman.setWeapon(this.w);
+      this.scene.add(this.selfHuman.root);
+    }
+    if (this.selfHuman) {
+      this.selfHuman.root.visible = driving;
+      if (driving) this.selfHuman.update(this.body.x, this.body.y, this.body.z, this.drive.yaw - Math.PI / 2, 0, true, dt, false, true);
+    }
 
     // view model
     this.vmKick = Math.max(0, this.vmKick - dt * 9);
     const reloadK = this.reloadUntil ? Math.sin(Math.min(1, (nowS - this.reloadStart) / WEAPONS[this.w].reloadS) * Math.PI) : 0;
-    this.vm.visible = this.alive;
+    this.vm.visible = this.alive && !driving;
+    $("cross").hidden = driving;
     this.vm.position.set(0.21 + Math.cos(this.bob) * 0.012 * Math.min(1, speed / 5), -0.2 + bobY * 0.5 - reloadK * 0.12, -0.38 + this.vmKick * 0.05);
     this.vm.rotation.set(this.vmKick * 0.12 - reloadK * 0.7, 0, reloadK * 0.3);
     this.vmFlashT -= dt;
@@ -538,6 +605,50 @@ export class Game {
     this.renderer.render(this.scene, this.camera);
     this.renderer.clearDepth();
     this.renderer.render(this.vmScene, this.vmCam);
+  }
+
+  /** Draw every forklift (ours from our own driving, the rest interpolated) and give them to the collision world. */
+  private updateForklifts(a: Snap | undefined, b: Snap | undefined, t: number) {
+    if (!b) return;
+    const k = a && b.time > a.time ? Math.max(0, Math.min(1, (t - a.time) / (b.time - a.time))) : 1;
+    for (const vb of b.vehicles) {
+      let pose = this.vehPoses.get(vb.id);
+      if (!pose) { pose = { x: vb.x, z: vb.z, yaw: vb.yaw, speed: 0 }; this.vehPoses.set(vb.id, pose); this.dynBoxes.push({ kind: "forklift", x0: 0, x1: 0, y0: 0, y1: 0, z0: 0, z1: 0 }); }
+      if (vb.id === this.veh && this.seat === 0 && this.alive) { pose.x = this.drive.x; pose.z = this.drive.z; pose.yaw = this.drive.yaw; pose.speed = this.drive.speed; }
+      else {
+        const va = a?.vehicles.find((q) => q.id === vb.id) ?? vb;
+        let dy = vb.yaw - va.yaw; while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
+        pose.x = va.x + (vb.x - va.x) * k; pose.z = va.z + (vb.z - va.z) * k; pose.yaw = va.yaw + dy * k; pose.speed = vb.speed;
+      }
+      let g = this.forklifts.get(vb.id);
+      if (!g) { g = forkliftModel(); this.forklifts.set(vb.id, g); this.scene.add(g); }
+      g.position.set(pose.x, 0, pose.z);
+      g.rotation.y = pose.yaw;
+      vehicleBoxInto(pose, this.dynBoxes[vb.id]);
+    }
+    setDynamicBoxes(this.dynBoxes);
+  }
+
+  /** Fraction (0…1) along a segment where it first meets a wall, for the chase camera. */
+  private wallHit(ax: number, ay: number, az: number, bx: number, by: number, bz: number) {
+    const dx = bx - ax, dy = by - ay, dz = bz - az, d = Math.hypot(dx, dy, dz) || 1;
+    const hit = rayWorld(ax, ay, az, dx / d, dy / d, dz / d, d);
+    return hit >= d ? 0 : 1 - Math.max(0, hit - 0.3) / d;
+  }
+
+  /** Nearest forklift we could get on, or null. */
+  private usable(): { id: number; seat: number } | null {
+    if (!this.latest || this.veh >= 0 || !this.alive) return null;
+    let best: { id: number; seat: number } | null = null, bd = VEH_USE_R;
+    for (const v of this.latest.vehicles) {
+      const pose = this.vehPoses.get(v.id) ?? v;
+      const d = Math.hypot(pose.x - this.body.x, pose.z - this.body.z);
+      if (d >= bd || (v.d && v.g)) continue;
+      const other = this.names.get(v.d || v.g);
+      if (other && other.tm !== this.myTeam) continue;
+      bd = d; best = { id: v.id, seat: v.d ? 1 : 0 };
+    }
+    return best;
   }
 
   private bracket(t: number): [Snap | undefined, Snap | undefined] {
@@ -571,6 +682,10 @@ export class Game {
     this.set("res", this.res[this.w] >= 900 ? "/ ∞" : `/ ${this.res[this.w]}`);
     this.set("weps", WEAPON_ORDER.map((id, i) => `<span class="${id === this.w ? "on" : this.owned.has(id) ? "" : "off"}">${i + 1} ${WEAPONS[id].name}</span>`).join(""), true);
     $("reloadHint").hidden = !this.reloadUntil;
+    const use = this.usable();
+    const prompt = this.veh >= 0 && m.me.alive ? (this.seat === 0 ? "Wysiądź z wózka" : "Zejdź z wózka") : use ? (use.seat === 0 ? "Wsiądź do wózka jako kierowca" : "Wskocz na wózek jako rzucający") : "";
+    $("usePrompt").hidden = !prompt;
+    if (prompt) this.set("usePromptText", prompt);
     // crosshair opens with spread
     const moving = Math.hypot(this.body.vx, this.body.vz) > 1.2 || !this.body.onGround;
     const gap = 4 + (w.spread + (moving ? w.moveSpread : 0)) * 420 + this.vmKick * 6;
@@ -586,7 +701,7 @@ export class Game {
     if (m.phase === "end") this.set("endCount", `Nowa zmiana za ${Math.ceil(m.left)} s`);
     // Live map
     $("geo").hidden = m.me.geo <= 0;
-    drawMinimap(this.mapCtx, m.players, this.myId, this.myTeam, { x: this.body.x, z: this.body.z, yaw: this.yaw }, m.me.geo > 0, nowS);
+    drawMinimap(this.mapCtx, m.players, [...this.vehPoses.values()], this.myId, this.myTeam, { x: this.body.x, z: this.body.z, yaw: this.yaw }, m.me.geo > 0, nowS);
   }
 
   quit(msg?: string) {

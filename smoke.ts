@@ -42,4 +42,30 @@ if (snap && snap.t === "snap") {
 }
 if (teamKills || teamHits) { console.log(`friendly fire happened: ${teamHits} hits, ${teamKills} kills`); bad++; }
 if (kills < 5) { console.log("too few kills: bots are not fighting"); bad++; }
+// forklifts: two players of one group get on (driver, thrower), the driver drives, both get off
+{
+  const fs = new Sim({ bots: false, difficulty: "normal", seed: 3 });
+  const d = fs.addHuman("Kierowca", 0), g = fs.addHuman("Rzucający", 0);
+  const P = (fs as unknown as { players: Map<number, { body: { x: number; z: number }; veh: number; seat: number; spawn: number }> }).players;
+  for (const id of [d, g]) { const b = P.get(id)!.body; b.x = -20; b.z = 3; }
+  fs.receive(d, { t: "use" }); fs.receive(g, { t: "use" });
+  const pd = P.get(d)!, pg = P.get(g)!;
+  const okSeats = pd.veh === 0 && pd.seat === 0 && pg.veh === 0 && pg.seat === 1;
+  const snap0 = fs.snapshot(d);
+  const rev = snap0 && snap0.t === "snap" ? snap0.me.vrev : -1;
+  // drive 2 s east along the main aisle at 4 m/s
+  let x = -20;
+  for (let i = 1; i <= 120; i++) { x += 4 / 60; fs.receive(d, { t: "drive", x, z: 1.2, yaw: 0, speed: 4, rev }); fs.step(1 / 60); }
+  const s1 = fs.snapshot(g);
+  const fx = s1 && s1.t === "snap" ? s1.vehicles[0].x : 0;
+  const thrower = s1 && s1.t === "snap" ? s1.players.find((p) => p.id === g)! : null;
+  // a teleport is refused and bumps the revision
+  fs.receive(d, { t: "drive", x: 30, z: 1.2, yaw: 0, speed: 4, rev }); fs.step(1 / 60);
+  const s2 = fs.snapshot(d);
+  const refused = s2 && s2.t === "snap" && s2.vehicles[0].x < 0 && s2.me.vrev !== rev;
+  fs.receive(d, { t: "use" }); fs.receive(g, { t: "use" });
+  const off = pd.veh === -1 && pg.veh === -1;
+  console.log(`forklift: seats ${okSeats}, drove to x=${fx.toFixed(1)}, thrower rode at x=${thrower?.x.toFixed(1)}, teleport refused ${refused}, got off ${off}`);
+  if (!okSeats || Math.abs(fx - x) > 0.2 || !thrower || Math.abs(thrower.x - (fx - 1.2)) > 0.3 || !refused || !off) { console.log("forklift check failed"); bad++; }
+}
 process.exit(bad ? 1 : 0);

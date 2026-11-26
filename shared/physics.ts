@@ -26,19 +26,27 @@ export interface MoveInput {
   sprint: boolean;
 }
 
+/** Moving obstacles (the forklifts), refreshed every tick by whoever runs the world. */
+let DYN: readonly Box[] = [];
+export function setDynamicBoxes(list: readonly Box[]) { DYN = list; }
+
 const overlaps = (b: Box, x: number, y: number, z: number) =>
   x + PLAYER_R > b.x0 && x - PLAYER_R < b.x1 && z + PLAYER_R > b.z0 && z - PLAYER_R < b.z1 && y + PLAYER_H > b.y0 && y < b.y1;
 
-/** True when a player standing at (x, y, z) would be inside something. */
-export function blocked(x: number, y: number, z: number): boolean {
+/** True when a player standing at (x, y, z) would be inside something; `moving` also counts the forklifts. */
+export function blocked(x: number, y: number, z: number, moving = true): boolean {
   for (const b of BOXES) if (overlaps(b, x, y, z)) return true;
+  if (moving) for (const b of DYN) if (overlaps(b, x, y, z)) return true;
   return false;
 }
+
+/** Static and moving boxes together, in that order. */
+function* allBoxes(): Generator<Box> { yield* BOXES; yield* DYN; }
 
 function moveAxis(p: Body, axis: 0 | 2, d: number) {
   if (d === 0) return;
   if (axis === 0) p.x += d; else p.z += d;
-  for (const b of BOXES) {
+  for (const b of allBoxes()) {
     if (!overlaps(b, p.x, p.y, p.z)) continue;
     // step up onto something low (a pallet edge, a kerb) if there is head room
     const rise = b.y1 - p.y;
@@ -67,14 +75,14 @@ export function stepBody(p: Body, inp: MoveInput, dt: number) {
   p.y += p.vy * dt;
   p.onGround = false;
   if (p.y <= 0) { p.y = 0; p.vy = 0; p.onGround = true; }
-  for (const b of BOXES) {
+  for (const b of allBoxes()) {
     if (!overlaps(b, p.x, p.y, p.z)) continue;
     if (p.vy <= 0 && p.y - p.vy * dt >= b.y1 - 0.05) { p.y = b.y1; p.vy = 0; p.onGround = true; }
     else if (p.vy > 0) { p.y = b.y0 - PLAYER_H - 0.001; p.vy = 0; }
   }
   // standing exactly on a top surface counts as ground
   if (!p.onGround && p.vy <= 0) {
-    for (const b of BOXES) {
+    for (const b of allBoxes()) {
       if (Math.abs(p.y - b.y1) < 0.002 && p.x + PLAYER_R > b.x0 && p.x - PLAYER_R < b.x1 && p.z + PLAYER_R > b.z0 && p.z - PLAYER_R < b.z1) { p.onGround = true; p.vy = 0; break; }
     }
   }
@@ -101,6 +109,10 @@ export function rayWorld(ox: number, oy: number, oz: number, dx: number, dy: num
   if (dy > 0) best = Math.min(best, (HALL.h - oy) / dy);
   for (const b of BOXES) {
     const t = rayBox(ox, oy, oz, dx, dy, dz, b.x0, b.y0, b.z0, b.x1, b.y1, b.z1);
+    if (t < best) best = t;
+  }
+  for (const b of DYN) {
+    const t = rayBox(ox, oy, oz, dx, dy, dz, b.x0, b.y0, b.z0, b.x1, b.shotY1 ?? b.y1, b.z1);
     if (t < best) best = t;
   }
   return best;

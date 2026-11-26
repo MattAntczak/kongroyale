@@ -10,6 +10,8 @@ export interface Box {
   kind: BoxKind;
   /** Facing for forklifts (radians around Y); 0 = forks toward +X. */
   rot?: number;
+  /** Top for thrown boxes when lower than y1 (a forklift stops boxes only up to its body). */
+  shotY1?: number;
 }
 
 export interface Zone { name: string; color: string; x0: number; z0: number; x1: number; z1: number }
@@ -50,8 +52,7 @@ add("stack", 10, -10, 1.4, 1.2, 2.5);
 add("stack", -8.5, -23, 1.2, 1.2, 1.25);
 add("cage", 3, -23.2, 4, 1.4, 2.2);
 
-// main aisle: a forklift and a few pallets
-add("forklift", -20, 1.2, 2.6, 1.3, 2.2, 0, 0);
+// main aisle: a few pallets (the forklifts are vehicles: VEHICLE_SPAWNS)
 add("stack", -31, -1.8, 1.4, 1.2, 1.25);
 add("stack", -6, 2.5, 1.2, 1.2, 2.5);
 add("stack", 4, -2.2, 1.4, 1.2, 1.25);
@@ -62,7 +63,7 @@ for (const [cx, cz, nx, nz] of [[-6, 12, 2, 2], [-1.5, 18, 3, 2], [-7, 21.5, 2, 
 }
 add("office", 8, 19.5, 8, 9, 3.2);
 
-// shipping (east): staged pallet blocks in lanes, two forklifts
+// shipping (east): staged pallet blocks in lanes
 const H = [1.25, 2.5, 1.25, 3.75, 2.5, 1.25];
 let hi = 0;
 for (const x of [19.5, 25.5, 31.5]) {
@@ -71,8 +72,6 @@ for (const x of [19.5, 25.5, 31.5]) {
     add("stack", x, z, 2.4, 2.0, H[hi++ % H.length]);
   }
 }
-add("forklift", 23.5, 0.2, 2.6, 1.3, 2.2, 0, Math.PI);
-add("forklift", 35.5, -8.5, 1.3, 2.6, 2.2, 0, Math.PI / 2);
 
 /** Every solid box in the hall. */
 export const BOXES: readonly Box[] = boxes;
@@ -105,6 +104,13 @@ export const PICKUPS: readonly PickupSpot[] = [
 /** Ceiling-mounted UWB anchors (the efectivo positioning network). Visual only. */
 export const ANCHORS: readonly (readonly [number, number])[] = [
   [-39.6, -24.6], [-39.6, 24.6], [39.6, -24.6], [39.6, 24.6], [-12, 0], [13, 0], [-12, -16], [13, 16], [26, -16], [26, 16],
+];
+
+/** Where the drivable forklifts stand at the start of a shift: one on each group's side, one in the middle aisle. */
+export const VEHICLE_SPAWNS: readonly { x: number; z: number; yaw: number }[] = [
+  { x: -20, z: 1.2, yaw: 0 },
+  { x: 23.5, z: 0.2, yaw: Math.PI },
+  { x: 35.5, z: -8.5, yaw: Math.PI / 2 },
 ];
 
 /** Dock doors on the east wall (z centre). Visual only. */
