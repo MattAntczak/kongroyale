@@ -111,8 +111,8 @@ export class Human {
     const g = c.getContext("2d")!;
     g.font = "500 30px Inter, -apple-system, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
     const tw = Math.min(250, g.measureText(name).width + 40);
-    g.fillStyle = ally ? (team ? "rgba(255,106,0,0.85)" : "rgba(71,79,255,0.85)") : "rgba(22,22,23,0.72)"; g.beginPath(); g.roundRect((256 - tw) / 2, 8, tw, 48, 24); g.fill();
-    g.fillStyle = "#f5f5f7"; g.fillText(name, 128, 33);
+    g.fillStyle = ally ? (team ? "#ff6a00" : "#474fff") : "#ffffff"; g.beginPath(); g.roundRect((256 - tw) / 2, 8, tw, 48, 12); g.fill();
+    g.fillStyle = ally ? "#ffffff" : "#1e293b"; g.fillText(name, 128, 33);
     const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
     this.label = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false, transparent: true }));
     this.label.scale.set(1.0, 0.25, 1); this.label.position.y = 2.15;

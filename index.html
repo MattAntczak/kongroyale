@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>efectivo ARENA</title>
   <meta name="description" content="Drużynowa bitwa na kartony w magazynie efectivo: Grupa A kontra Grupa B, z botami albo ze znajomymi online." />
-  <meta name="theme-color" content="#000000" />
+  <meta name="theme-color" content="#f8fafc" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./client/style.css" />
 </head>
 <body>
@@ -21,85 +21,94 @@
     <div id="feed"></div>
     <div id="cross"><i></i><i></i><i></i><i></i><span class="dot"></span></div>
     <div id="hitmark"><svg viewBox="0 0 26 26" width="26" height="26" fill="none" stroke="#f5f5f7" stroke-width="2" stroke-linecap="round"><path d="M3 3l6 6M23 3l-6 6M3 23l6-6M23 23l-6-6" /></svg></div>
-    <div id="reloadHint" hidden>Przeładowanie</div>
+    <div id="reloadHint" hidden><span class="badge badge-gray">Przeładowanie</span></div>
     <div id="chat"></div>
     <input id="chatbox" class="field" maxlength="120" placeholder="Wiadomość do hali…" hidden />
     <div id="map" class="glass">
-      <header><span class="mono">efectivo LIVE</span><span class="live-pill"><span class="dot"></span> UWB</span></header>
+      <header><span>Mapa Live</span><span class="live-pill"><span class="dot"></span> UWB</span></header>
       <canvas id="mapc" width="544" height="340"></canvas>
-      <div class="geo" id="geo" hidden>efectivo GEO · wszyscy widoczni</div>
+      <div class="geo" id="geo" hidden><span class="badge badge-blue">efectivo GEO · widzisz wszystkich</span></div>
     </div>
     <div class="hud-br">
       <div class="glass"><div class="lbl">Zdrowie</div><div class="big" id="hp">100</div><div class="hpbar" id="hpbar"><i></i></div></div>
       <div class="glass"><div class="lbl" id="wname">Kartonomiot</div><div class="big"><span id="mag">30</span><small id="res">/ 120</small></div><div class="weps" id="weps"></div></div>
     </div>
-    <div id="toast" class="glass"></div>
+    <div id="toast"></div>
     <div id="vignette"></div>
     <div id="protect"></div>
   </div>
 
-  <div id="death" hidden><div class="card"><p class="eyebrow">Wyeliminowany</p><h2 id="deathBy"></h2><p id="deathSub">Wracasz na halę za chwilę.</p><div class="count" id="deathCount">POWRÓT ZA 3 S</div></div></div>
+  <div id="death" hidden><div class="card"><p class="eyebrow"><span class="badge badge-gray">Wyeliminowany</span></p><h2 id="deathBy"></h2><p id="deathSub">Wracasz na halę za chwilę.</p><div class="count"><span class="badge badge-blue" id="deathCount">Powrót za 3 s</span></div></div></div>
 
-  <div id="board" class="overlay" hidden><div class="card glass"><h3><span>Tablica zmiany</span><span id="boardRoom" class="mono"></span></h3><table class="board" id="boardTable"></table></div></div>
+  <div id="board" class="overlay" hidden><div class="card"><h3><span>Tablica zmiany</span><span id="boardRoom" class="badge badge-gray"></span></h3><table class="board" id="boardTable"></table></div></div>
 
-  <div id="end" class="overlay" hidden><div class="card"><p class="eyebrow">Koniec zmiany</p><h2 id="endTitle">Zmiana<br>zakończona.</h2><p id="endSub"></p><table class="board" id="endTable"></table><p class="mono" id="endCount" style="font-size:12px;letter-spacing:.14em;margin:0">NOWA ZMIANA ZA 10 S</p></div></div>
+  <div id="end" class="overlay" hidden><div class="card">
+    <div class="endtop"><p class="eyebrow"><span class="badge badge-gray">Koniec zmiany</span></p><h2 id="endTitle">Zmiana zakończona</h2><p id="endSub" style="margin:0"></p></div>
+    <table class="board" id="endTable"></table>
+    <div class="endfoot"><span class="badge badge-blue" id="endCount">Nowa zmiana za 10 s</span></div>
+  </div></div>
 
   <div id="pause" class="overlay" hidden><div class="card">
-    <p class="eyebrow">Pauza</p>
-    <h2>Hala czeka.<br>Ty też?</h2>
-    <p>Gra toczy się dalej — inni gracze i boty nie stają w miejscu.</p>
+    <h2>Pauza</h2>
+    <p>Gra toczy się dalej: inni gracze i boty nie stają w miejscu.</p>
     <div class="sliders">
       <label>Czułość myszy <input type="range" id="sens" min="0.2" max="3" step="0.05" /><output id="sensOut"></output></label>
       <label>Głośność <input type="range" id="vol" min="0" max="1" step="0.05" /><output id="volOut"></output></label>
       <label>Pole widzenia <input type="range" id="fov" min="60" max="100" step="1" /><output id="fovOut"></output></label>
     </div>
-    <div class="row"><button class="btn btn-primary" id="resume">Wróć na halę</button><button class="btn btn-ghost" id="quit">Wyjdź do menu <span class="chev">›</span></button></div>
+    <div class="row"><button class="btn btn-ghost" id="quit">Wyjdź do menu</button><button class="btn btn-primary" id="resume">Wróć na halę</button></div>
   </div></div>
 
-  <!-- title -->
+  <!-- title: the efectivo app shell -->
   <section id="title">
-    <nav><span class="wordmark">efectivo<small>ARENA</small></span><span class="live-pill" id="srvPill"><span class="dot"></span> LIVE</span></nav>
-    <div class="hero">
-      <div>
-        <p class="eyebrow reveal">Nowe efectivo ARENA · Grupa A kontra Grupa B</p>
-        <h1 class="reveal d1">Każdy ruch<br>zostawia ślad.</h1>
-        <p class="lead reveal d1">Dwie grupy, jedna hala i tagi UWB na każdej kamizelce. Grupa A startuje od zachodu, Grupa B od rampy wysyłkowej. Mapa efectivo Live pokazuje ci całą twoją grupę, a rywali tylko wtedy, gdy rzucają paczkami.</p>
-        <div class="setup reveal d2">
-          <div class="row"><span class="label">Twoje imię</span><input class="field" id="nick" maxlength="16" placeholder="Magazynier" style="flex:1" /></div>
-          <div class="row" id="modeRow"><span class="label">Tryb</span><button class="chip" data-mode="bots" aria-pressed="true">Z botami</button><button class="chip" data-mode="online" aria-pressed="false">Online ze znajomymi</button></div>
-          <div class="row" id="teamRow"><span class="label">Twoja grupa</span><button class="chip" data-team="-1" aria-pressed="true">Dowolna</button><button class="chip" data-team="0" aria-pressed="false"><span class="swatch" style="background:#474fff"></span>Grupa A</button><button class="chip" data-team="1" aria-pressed="false"><span class="swatch" style="background:#ff6a00"></span>Grupa B</button></div>
-          <div class="row" id="diffRow"><span class="label">Poziom botów</span><button class="chip" data-diff="easy" aria-pressed="false">Łatwy</button><button class="chip" data-diff="normal" aria-pressed="true">Normalny</button><button class="chip" data-diff="hard" aria-pressed="false">Trudny</button></div>
-          <div class="row" id="countRow"><span class="label">Skład</span><button class="chip" data-count="4" aria-pressed="false">2 na 2</button><button class="chip" data-count="6" aria-pressed="false">3 na 3</button><button class="chip" data-count="8" aria-pressed="true">4 na 4</button><button class="chip" data-count="10" aria-pressed="false">5 na 5</button></div>
-          <div class="row" id="roomRow" hidden><span class="label">Kod hali</span><input class="field mono" id="room" maxlength="8" placeholder="HALA" style="text-transform:uppercase;flex:1" /></div>
-          <div class="cta"><button class="btn btn-primary" id="play">Wejdź na halę</button><button class="btn btn-ghost" id="howBtn">Sterowanie <span class="chev">›</span></button></div>
-          <div class="status" id="status"></div>
+    <nav><div class="brand"><span class="wordmark">efectivo<small>ARENA</small></span></div><span class="live-pill" id="srvPill"><span class="dot"></span> LIVE</span></nav>
+    <div class="page">
+      <div class="page-header">
+        <h1>Nowa zmiana: Grupa A kontra Grupa B</h1>
+        <p>Dwie grupy, jedna hala i tag UWB na każdej kamizelce. Rzucacie w siebie kartonami z wyrzutni, a mapa Live pokazuje całą twoją grupę i rywali tylko wtedy, gdy rzucają.</p>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <div class="card-head"><h2>Ustawienia gry</h2></div>
+          <div class="card-body setup">
+            <div class="row"><span class="label">Twoje imię</span><input class="field" id="nick" maxlength="16" placeholder="Magazynier" style="flex:1" /></div>
+            <div class="row" id="modeRow"><span class="label">Tryb</span><button class="chip" data-mode="bots" aria-pressed="true">Z botami</button><button class="chip" data-mode="online" aria-pressed="false">Online ze znajomymi</button></div>
+            <div class="row" id="teamRow"><span class="label">Twoja grupa</span><button class="chip" data-team="-1" aria-pressed="true">Dowolna</button><button class="chip" data-team="0" aria-pressed="false"><span class="swatch" style="background:var(--team-a)"></span>Grupa A</button><button class="chip" data-team="1" aria-pressed="false"><span class="swatch" style="background:var(--team-b)"></span>Grupa B</button></div>
+            <div class="row" id="diffRow"><span class="label">Poziom botów</span><button class="chip" data-diff="easy" aria-pressed="false">Łatwy</button><button class="chip" data-diff="normal" aria-pressed="true">Normalny</button><button class="chip" data-diff="hard" aria-pressed="false">Trudny</button></div>
+            <div class="row" id="countRow"><span class="label">Skład</span><button class="chip" data-count="4" aria-pressed="false">2 na 2</button><button class="chip" data-count="6" aria-pressed="false">3 na 3</button><button class="chip" data-count="8" aria-pressed="true">4 na 4</button><button class="chip" data-count="10" aria-pressed="false">5 na 5</button></div>
+            <div class="row" id="roomRow" hidden><span class="label">Kod hali</span><input class="field mono" id="room" maxlength="8" placeholder="HALA" style="text-transform:uppercase;flex:1" /></div>
+            <div class="cta"><button class="btn btn-primary btn-lg" id="play">Wejdź na halę</button><button class="btn btn-ghost btn-lg" id="howBtn">Sterowanie</button></div>
+            <div class="status" id="status"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Mapa Live · Hala A</h2><span class="live-pill"><span class="dot"></span> LIVE</span></div>
+          <div class="card-body" style="padding-bottom:0"><div class="stage"><canvas id="preview"></canvas></div></div>
+          <div class="legend"><span class="badge badge-blue"><span class="swatch" style="background:var(--team-a)"></span>Grupa A</span><span class="badge badge-orange"><span class="swatch" style="background:var(--team-b)"></span>Grupa B</span><span class="sp"></span><span id="previewCap">Grupa A 0 : 0 Grupa B</span></div>
         </div>
       </div>
-      <div class="stage reveal d2"><canvas id="preview"></canvas><div class="tag"><span class="live-pill"><span class="dot"></span> LIVE</span></div><div class="cap"><span>Hala A · 80 × 50 m</span><span id="previewCap">Grupa A 0 : 0 Grupa B</span></div></div>
-    </div>
-    <div class="stats">
-      <div class="stat"><b>80 m</b><span>długości hali</span></div>
-      <div class="stat"><b>12</b><span>regałów wysokiego składowania</span></div>
-      <div class="stat"><b>5 na 5</b><span>graczy na zmianie</span></div>
-      <div class="stat"><b>40</b><span>eliminacji grupy do wygranej</span></div>
-    </div>
-    <div class="controls-card" id="how">
-      <div>
-        <div><p class="eyebrow">Sterowanie</p><h2>Mały sprzęt.<br>Wielka precyzja.</h2><p>Mysz i klawiatura. Kliknij w obraz, żeby przejąć kursor; Esc otwiera pauzę z czułością, głośnością i polem widzenia.</p></div>
-        <div class="keys">
-          <kbd>W A S D</kbd><span>Ruch</span>
-          <kbd>Mysz</kbd><span>Rozglądanie się i celowanie</span>
-          <kbd>LPM</kbd><span>Rzut kartonem</span>
-          <kbd>Shift</kbd><span>Sprint</span>
-          <kbd>Spacja</kbd><span>Skok (na niskie palety)</span>
-          <kbd>R</kbd><span>Przeładowanie</span>
-          <kbd>1 2 3 · kółko</kbd><span>Kartonomiot, Paczkownik, Paletówka</span>
-          <kbd>Tab</kbd><span>Tablica wyników</span>
-          <kbd>T</kbd><span>Czat (online)</span>
+      <div class="tiles">
+        <div class="card tile"><span>Hala</span><b>80 × 50 m</b></div>
+        <div class="card tile"><span>Regały wysokiego składowania</span><b>12</b></div>
+        <div class="card tile"><span>Skład</span><b>do 5 na 5</b></div>
+        <div class="card tile"><span>Eliminacje grupy do wygranej</span><b>40</b></div>
+      </div>
+      <div class="card" id="how">
+        <div class="card-head"><h2>Sterowanie</h2><span class="badge badge-gray">Kliknij w obraz, żeby przejąć kursor · Esc to pauza</span></div>
+        <div class="card-body keys">
+          <div><kbd>W A S D</kbd>Ruch</div>
+          <div><kbd>Mysz</kbd>Rozglądanie się i celowanie</div>
+          <div><kbd>LPM</kbd>Rzut kartonem</div>
+          <div><kbd>Shift</kbd>Sprint</div>
+          <div><kbd>Spacja</kbd>Skok na niskie palety</div>
+          <div><kbd>R</kbd>Przeładowanie</div>
+          <div><kbd>1 2 3</kbd>Kartonomiot, Paczkownik, Paletówka</div>
+          <div><kbd>Tab</kbd>Tablica wyników</div>
+          <div><kbd>T</kbd>Czat</div>
         </div>
       </div>
     </div>
-    <footer><span class="mono">efectivo · ARENA</span> — gra pokazowa. Każdy ruch zostawia ślad.</footer>
+    <footer>efectivo ARENA · gra pokazowa na hali efectivo</footer>
   </section>
 
   <script type="module" src="./client/main.ts"></script>

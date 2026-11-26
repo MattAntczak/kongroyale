@@ -377,14 +377,14 @@ export class Game {
       case "kill": {
         const mine = e.by === this.myId || e.on === this.myId;
         const col = (id: number) => TEAM_CSS[(this.names.get(id)?.tm ?? 0) & 1];
-        this.feed(`<b style="color:${col(e.by)}">${esc(name(e.by))}</b><span class="w">${WEAPONS[e.w].name}${e.head ? " · głowa" : ""}</span><b style="color:${col(e.on)}">${esc(name(e.on))}</b>`, mine);
+        this.feed(`<b style="color:${col(e.by)}">${esc(name(e.by))}</b><span class="w">${WEAPONS[e.w].name}${e.head ? " · w kask" : ""}</span><b style="color:${col(e.on)}">${esc(name(e.on))}</b>`, mine);
         if (e.by === this.myId && e.on !== this.myId) {
           this.toast(`Wyeliminowano: ${name(e.on)}`); sfx.killConfirm();
           this.hitT = 0.3; $("hitmark").className = "on kill";
         }
         if (e.on === this.myId) {
-          $("deathBy").innerHTML = e.by === this.myId ? "Własny strzał.<br>Zdarza się." : `${esc(name(e.by))}<br>był(a) szybsza.`;
-          $("deathSub").textContent = `${WEAPONS[e.w].name}${e.head ? " · trafienie w głowę" : ""}. Wracasz na halę za chwilę.`;
+          $("deathBy").textContent = e.by === this.myId ? "Własny karton. Zdarza się." : `Trafił(a) cię: ${name(e.by)}`;
+          $("deathSub").textContent = `${WEAPONS[e.w].name}${e.head ? " · trafienie w kask" : ""}. Wracasz na halę za chwilę.`;
         }
         break;
       }
@@ -393,7 +393,7 @@ export class Game {
       case "leave": this.feed(`<b>${esc(e.name)}</b> kończy zmianę`, false); break;
       case "chat": this.chat(e.name, e.text); break;
       case "end":
-        $("endTitle").innerHTML = e.winner < 0 ? "Remis.<br>Obie grupy równo." : `${TEAM_NAMES[e.winner]}<br>wygrywa zmianę.`;
+        $("endTitle").textContent = e.winner < 0 ? "Remis: obie grupy równo" : `${TEAM_NAMES[e.winner]} wygrywa zmianę`;
         this.endMvp = e.mvp;
         break;
       case "start": $("end").hidden = true; break;
@@ -524,7 +524,7 @@ export class Game {
     this.vmKick = Math.max(0, this.vmKick - dt * 9);
     const reloadK = this.reloadUntil ? Math.sin(Math.min(1, (nowS - this.reloadStart) / WEAPONS[this.w].reloadS) * Math.PI) : 0;
     this.vm.visible = this.alive;
-    this.vm.position.set(0.17 + Math.cos(this.bob) * 0.012 * Math.min(1, speed / 5), -0.16 + bobY * 0.5 - reloadK * 0.12, -0.38 + this.vmKick * 0.05);
+    this.vm.position.set(0.21 + Math.cos(this.bob) * 0.012 * Math.min(1, speed / 5), -0.2 + bobY * 0.5 - reloadK * 0.12, -0.38 + this.vmKick * 0.05);
     this.vm.rotation.set(this.vmKick * 0.12 - reloadK * 0.7, 0, reloadK * 0.3);
     this.vmFlashT -= dt;
     this.vmFlash.visible = this.vmFlashT > 0;
@@ -569,7 +569,7 @@ export class Game {
     this.set("wname", w.name);
     this.set("mag", String(this.mag[this.w]));
     this.set("res", this.res[this.w] >= 900 ? "/ ∞" : `/ ${this.res[this.w]}`);
-    this.set("weps", WEAPON_ORDER.map((id, i) => `<span class="${id === this.w ? "on" : this.owned.has(id) ? "" : "off"}">${i + 1} ${WEAPONS[id].name.toUpperCase()}</span>`).join(""), true);
+    this.set("weps", WEAPON_ORDER.map((id, i) => `<span class="${id === this.w ? "on" : this.owned.has(id) ? "" : "off"}">${i + 1} ${WEAPONS[id].name}</span>`).join(""), true);
     $("reloadHint").hidden = !this.reloadUntil;
     // crosshair opens with spread
     const moving = Math.hypot(this.body.vx, this.body.vz) > 1.2 || !this.body.onGround;
@@ -582,8 +582,8 @@ export class Game {
     if (this.toastT > 0) { this.toastT -= dt; if (this.toastT <= 0) $("toast").classList.remove("on"); }
     // death screen
     $("death").hidden = m.me.alive || m.phase !== "play";
-    if (!m.me.alive) this.set("deathCount", `POWRÓT NA HALĘ ZA ${Math.ceil(m.me.respawnIn)} S`);
-    if (m.phase === "end") this.set("endCount", `NOWA ZMIANA ZA ${Math.ceil(m.left)} S`);
+    if (!m.me.alive) this.set("deathCount", `Powrót na halę za ${Math.ceil(m.me.respawnIn)} s`);
+    if (m.phase === "end") this.set("endCount", `Nowa zmiana za ${Math.ceil(m.left)} s`);
     // Live map
     $("geo").hidden = m.me.geo <= 0;
     drawMinimap(this.mapCtx, m.players, this.myId, this.myTeam, { x: this.body.x, z: this.body.z, yaw: this.yaw }, m.me.geo > 0, nowS);

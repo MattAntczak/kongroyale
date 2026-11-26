@@ -79,8 +79,8 @@ $("play").addEventListener("click", () => {
 
 // is the online server up?
 fetch("/efectivo/health").then((r) => r.ok ? r.json() : Promise.reject()).then((h: { rooms: number; players: number }) => {
-  $("srvPill").innerHTML = `<span class="dot"></span> SERWER ONLINE · ${h.players} GRACZY`;
-}).catch(() => { $("srvPill").innerHTML = `<span class="dot"></span> TRENING Z BOTAMI`; });
+  $("srvPill").innerHTML = `<span class="dot"></span> Serwer online · ${h.players} graczy`;
+}).catch(() => { $("srvPill").innerHTML = `<span class="dot"></span> Trening z botami`; });
 
 // ------------------------------------------------------------------ title preview: a bot match on the Live map
 
@@ -107,12 +107,12 @@ function startPreview() {
     const s = Math.min((W - pad * 2) / (HALL.x1 - HALL.x0), (H - pad * 2 - 30 * dpr) / (HALL.z1 - HALL.z0));
     const ox = (W - s * (HALL.x1 - HALL.x0)) / 2, oz = (H - s * (HALL.z1 - HALL.z0)) / 2 + 6 * dpr;
     const X = (x: number) => ox + (x - HALL.x0) * s, Z = (z: number) => oz + (z - HALL.z0) * s;
-    g.fillStyle = "#1d1d1f"; g.fillRect(0, 0, W, H);
-    g.fillStyle = "#000"; g.beginPath(); g.roundRect(X(HALL.x0), Z(HALL.z0), (HALL.x1 - HALL.x0) * s, (HALL.z1 - HALL.z0) * s, 10 * dpr); g.fill();
-    for (const zn of ZONES) { g.fillStyle = zn.color + "1f"; g.fillRect(X(zn.x0), Z(zn.z0), (zn.x1 - zn.x0) * s, (zn.z1 - zn.z0) * s); }
+    g.fillStyle = "#f8fafc"; g.fillRect(0, 0, W, H);
+    g.fillStyle = "#ffffff"; g.strokeStyle = "#e2e8f0"; g.lineWidth = dpr; g.beginPath(); g.roundRect(X(HALL.x0), Z(HALL.z0), (HALL.x1 - HALL.x0) * s, (HALL.z1 - HALL.z0) * s, 8 * dpr); g.fill(); g.stroke();
+    for (const zn of ZONES) { g.fillStyle = zn.color + "14"; g.fillRect(X(zn.x0), Z(zn.z0), (zn.x1 - zn.x0) * s, (zn.z1 - zn.z0) * s); }
     for (const b of BOXES) {
       if (b.kind === "wall") continue;
-      g.fillStyle = b.kind === "rack" ? "rgba(245,245,247,0.2)" : "rgba(245,245,247,0.1)";
+      g.fillStyle = b.kind === "rack" ? "#cbd5e1" : "#e2e8f0";
       g.fillRect(X(b.x0), Z(b.z0), (b.x1 - b.x0) * s, (b.z1 - b.z0) * s);
     }
     for (const p of snap.players) {
@@ -122,10 +122,10 @@ function startPreview() {
       const lastPt = tr[tr.length - 1];
       if (!lastPt || Math.hypot(lastPt[0] - p.x, lastPt[1] - p.z) > 0.4) { tr.push([p.x, p.z]); if (tr.length > 40) tr.shift(); }
       const col = TEAM_CSS[p.tm & 1];
-      g.strokeStyle = col + "55"; g.lineWidth = 1.5 * dpr; g.beginPath();
+      g.strokeStyle = col + "66"; g.lineWidth = 1.5 * dpr; g.beginPath();
       tr.forEach(([x, z], i) => i ? g.lineTo(X(x), Z(z)) : g.moveTo(X(x), Z(z))); g.stroke();
-      if (p.fired < 0.3) { g.fillStyle = "rgba(245,245,247,0.2)"; g.beginPath(); g.arc(X(p.x), Z(p.z), 10 * dpr, 0, Math.PI * 2); g.fill(); }
-      g.fillStyle = col; g.beginPath(); g.arc(X(p.x), Z(p.z), 3.5 * dpr, 0, Math.PI * 2); g.fill();
+      if (p.fired < 0.3) { g.fillStyle = col + "33"; g.beginPath(); g.arc(X(p.x), Z(p.z), 10 * dpr, 0, Math.PI * 2); g.fill(); }
+      g.fillStyle = col; g.strokeStyle = "#fff"; g.lineWidth = 1.5 * dpr; g.beginPath(); g.arc(X(p.x), Z(p.z), 4 * dpr, 0, Math.PI * 2); g.fill(); g.stroke();
     }
     $("previewCap").textContent = `Grupa A ${snap.score[0]} : ${snap.score[1]} Grupa B`;
   };

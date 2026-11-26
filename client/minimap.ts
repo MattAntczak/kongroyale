@@ -14,17 +14,17 @@ let base: HTMLCanvasElement | null = null;
 function drawBase(): HTMLCanvasElement {
   const c = document.createElement("canvas"); c.width = W; c.height = H;
   const g = c.getContext("2d")!;
-  g.fillStyle = "#050506"; g.fillRect(0, 0, W, H);
+  g.fillStyle = "#f8fafc"; g.fillRect(0, 0, W, H);
   for (const zn of ZONES) {
-    g.fillStyle = zn.color + "22"; g.fillRect(X(zn.x0), Z(zn.z0), (zn.x1 - zn.x0) * sx, (zn.z1 - zn.z0) * sz);
-    g.strokeStyle = zn.color + "88"; g.lineWidth = 1; g.strokeRect(X(zn.x0) + 0.5, Z(zn.z0) + 0.5, (zn.x1 - zn.x0) * sx - 1, (zn.z1 - zn.z0) * sz - 1);
+    g.fillStyle = zn.color + "1a"; g.fillRect(X(zn.x0), Z(zn.z0), (zn.x1 - zn.x0) * sx, (zn.z1 - zn.z0) * sz);
+    g.strokeStyle = zn.color + "66"; g.lineWidth = 1; g.strokeRect(X(zn.x0) + 0.5, Z(zn.z0) + 0.5, (zn.x1 - zn.x0) * sx - 1, (zn.z1 - zn.z0) * sz - 1);
   }
   for (const b of BOXES) {
     if (b.kind === "wall") continue;
-    g.fillStyle = b.kind === "rack" ? "rgba(245,245,247,0.22)" : b.kind === "column" ? "rgba(245,245,247,0.4)" : "rgba(245,245,247,0.13)";
+    g.fillStyle = b.kind === "rack" ? "#cbd5e1" : b.kind === "column" ? "#94a3b8" : "#e2e8f0";
     g.fillRect(X(b.x0), Z(b.z0), (b.x1 - b.x0) * sx, (b.z1 - b.z0) * sz);
   }
-  g.font = "500 13px JetBrains Mono, Menlo, monospace"; g.fillStyle = "rgba(245,245,247,0.45)";
+  g.font = "600 13px Inter, system-ui, sans-serif"; g.fillStyle = "#64748b";
   for (const zn of ZONES) g.fillText(zn.name.replace("STREFA ", ""), X(zn.x0) + 6, Z(zn.z0) + 16);
   return c;
 }
@@ -39,15 +39,15 @@ export function drawMinimap(ctx: CanvasRenderingContext2D, players: PlayerSnap[]
     if (p.tm === myTeam) {
       ctx.fillStyle = `rgba(${TEAM_RGB[p.tm & 1]},1)`;
       ctx.beginPath(); ctx.arc(X(p.x), Z(p.z), 5, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = "rgba(245,245,247,0.7)"; ctx.lineWidth = 1; ctx.stroke();
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2; ctx.stroke();
       continue;
     }
     const show = geo || p.fired < 0.8;
     if (!show) continue;
     const a = geo ? 1 : 1 - p.fired / 0.8;
-    ctx.fillStyle = `rgba(245,245,247,${0.25 * a})`;
+    ctx.fillStyle = `rgba(240,68,56,${0.18 * a})`;
     ctx.beginPath(); ctx.arc(X(p.x), Z(p.z), 12, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = `rgba(239,68,68,${a})`;
+    ctx.fillStyle = `rgba(240,68,56,${a})`;
     ctx.beginPath(); ctx.arc(X(p.x), Z(p.z), 5, 0, Math.PI * 2); ctx.fill();
   }
   // own tag: an accent dot with a pulsing halo and a view cone
@@ -65,5 +65,5 @@ export function drawMinimap(ctx: CanvasRenderingContext2D, players: PlayerSnap[]
   ctx.shadowColor = "rgba(71,79,255,0.9)"; ctx.shadowBlur = 10;
   ctx.fillStyle = myTeam === 1 ? "#ff6a00" : "#474fff"; ctx.beginPath(); ctx.arc(mx, mz, 6, 0, Math.PI * 2); ctx.fill();
   ctx.shadowBlur = 0;
-  ctx.strokeStyle = "#f5f5f7"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(mx, mz, 6, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(mx, mz, 6, 0, Math.PI * 2); ctx.stroke();
 }
