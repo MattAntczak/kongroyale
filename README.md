@@ -10,7 +10,7 @@ a pokoje online obsługuje mały serwer Node.js z WebSocketami. Tryb z botami dz
   - Technik przytrzymuje E przy punkcie A albo B przez 4 sekundy: podłącza serwer albo montuje tagi zegarkowe.
   - Potem trwa 40 sekund uruchamiania. Pracownicy muszą w tym czasie przytrzymać E przy tym punkcie przez 7 sekund,
     żeby wszystko odłączyć. Puszczenie E zaczyna od nowa.
-  - Rundę wygrywa też drużyna, która wyeliminuje całą drugą. Gdy minie 3 minuty bez podłączenia, wygrywają pracownicy.
+  - Rundę wygrywa też drużyna, która wyeliminuje całą drugą. Gdy minie 5 minut bez podłączenia, wygrywają pracownicy.
   - W trakcie rundy nikt nie wraca do gry. Wyeliminowany gracz ogląda kolegów z drużyny.
   - Mecz trwa do 4 wygranych rund, a po trzeciej rundzie drużyny zamieniają się rolami.
 - **Dwie misje:**
@@ -20,14 +20,16 @@ a pokoje online obsługuje mały serwer Node.js z WebSocketami. Tryb z botami dz
 - **Odprawa zamiast ekranu ładowania:** przed meczem przewija się historia misji i zadanie twojej drużyny.
 - **Lobby ze slotami:** widać obie drużyny, wybierasz stronę i liczbę botów w każdej. Online mecz ustawia i zaczyna
   gospodarz, czyli pierwsza osoba w hali.
-- **Hala 240 × 130 m (31 200 m²) w trzech konfiguracjach,** losowanych przy każdej zmianie: klasyczna, z regałami
-  buforowymi na środku i lustrzana. Ścianki działowe dzielą środek hali na trzy trasy podejścia.
+- **Hala 540 × 290 m (ok. 156 000 m²) w trzech konfiguracjach,** losowanych przy każdym meczu: klasyczna, z regałami
+  buforowymi na środku i lustrzana, po około 300 regałów. Ścianki działowe dzielą środek hali na trzy trasy, a główna
+  alejka jest na środku przegrodzona. Boty-technicy idą jedną z trzech tras, boty-pracownicy trzymają punkty A i B.
 - **Regały snajperskie:** kilka regałów w każdej konfiguracji jest niższych, ma żółtą drabinę i pomost na górze. Na
   pomoście nie ma osłony, skok z góry zabiera zdrowie, a trafiony bot namierza strzelca nawet z daleka.
+- **Lunety pod prawym przyciskiem myszy:** Kartonomiot ma celownik 2×, Paczkownik lunetę 4× i daleki zasięg.
 - **Cztery sloty:** Kartonomiot (serie), Paczkownik (pojedyncze paczki), Paletówka (garść paczek, do znalezienia na
   hali) i kartonowy granat (rzucany łukiem, razi rywali w promieniu 6,5 m). Kartony naprawdę lecą, a zamiast
   wystrzału słychać piknięcie skanera kodów.
-- **Wózki widłowe dla dwóch osób (6 na hali):** pierwszy gracz, który naciśnie E, prowadzi. Drugi wskakuje na tylny
+- **Wózki widłowe dla dwóch osób (10 na hali):** pierwszy gracz, który naciśnie E, prowadzi. Drugi wskakuje na tylny
   podest i rzuca. Karoseria osłania nogi, a rzucający stoi odsłonięty.
 - **Mapa Live:** pokazuje twoją drużynę, wózki i cel misji, a rywali tylko wtedy, gdy rzucają.
 - **Wygląd:** interfejs korzysta z design systemu aplikacji efectivo (`efectivo-admin-frontend`).
@@ -60,6 +62,7 @@ Testy: `npm test` uruchamia typecheck oraz test bez grafiki. Ten test sprawdza:
 |---|---|
 | W A S D | Ruch, a w wózku gaz, wsteczny i skręt. W przy żółtej drabinie wchodzi na regał |
 | Mysz, LPM | Celowanie i rzut kartonem |
+| PPM | Celownik: Kartonomiot 2×, Paczkownik luneta 4× |
 | Shift, Spacja | Sprint, skok na niskie palety |
 | R | Przeładowanie |
 | 1 2 3 4 | Kartonomiot, Paczkownik, Paletówka, kartonowy granat |

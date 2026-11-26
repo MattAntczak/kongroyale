@@ -4,7 +4,7 @@
 
 import * as THREE from "three";
 import { EYE_H, rayPlayer, rayWorld, stepBody, viewDir, type Body } from "../shared/physics";
-import { WEAPONS, WEAPON_ORDER, type WeaponId } from "../shared/weapons";
+import { AIM_SPREAD, WEAPONS, WEAPON_ORDER, type WeaponId } from "../shared/weapons";
 import { spreadDirs } from "../shared/sim";
 import type { Ev, HostMsg, PlayerSnap, VehicleSnap } from "../shared/proto";
 import { VEH_USE_R, seatPos, stepVehicle, vehicleBox as vehicleBoxInto, type VehicleState } from "../shared/vehicle";
@@ -89,6 +89,10 @@ export class Game {
   /** Who we watch while we are out, and when the next start-up beep is due. */
   private specId = 0;
   private specClick = false;
+  /** Looking through the sight: the button, how far in we are (0…1), and the magnification right now. */
+  private aiming = false;
+  private zoomK = 0;
+  private zoomNow = 1;
   private beepAt = 0;
   private bannerT = 0;
   private proj = new THREE.Vector3();
@@ -120,22 +124,22 @@ export class Game {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
     this.renderer.autoClear = false;
-    this.camera = new THREE.PerspectiveCamera(this.settings.fov, 1, 0.05, 420);
+    this.camera = new THREE.PerspectiveCamera(this.settings.fov, 1, 0.05, 700);
     this.scene.background = new THREE.Color(0x07070a);
-    this.scene.fog = new THREE.Fog(0x07070a, 70, 260);
+    this.scene.fog = new THREE.Fog(0x07070a, 90, 460);
 
     // light: a cool sky fill, a key from the roof lights with shadows, a few warm points down the hall
     this.scene.add(new THREE.HemisphereLight(0xdfe4ff, 0x2a2622, 1.25));
     const key = new THREE.DirectionalLight(0xffffff, 1.6);
-    key.position.set(-30, 60, 20);
+    key.position.set(-60, 120, 40);
     key.castShadow = true;
     key.shadow.mapSize.set(4096, 4096);
-    Object.assign(key.shadow.camera, { left: -128, right: 128, top: 72, bottom: -72, near: 1, far: 160 });
+    Object.assign(key.shadow.camera, { left: -285, right: 285, top: 160, bottom: -160, near: 1, far: 320 });
     key.shadow.bias = -0.0006;
     key.shadow.normalBias = 0.03;
     this.scene.add(key);
-    for (const [x, z] of [[-90, 0], [-45, 0], [0, -30], [0, 30], [45, 0], [90, 0]]) {
-      const p = new THREE.PointLight(0xfff1dc, 60, 45, 1.6); p.position.set(x, 9.5, z); this.scene.add(p);
+    for (const [x, z] of [[-200, 0], [-100, 0], [0, -60], [0, 60], [100, 0], [200, 0]]) {
+      const p = new THREE.PointLight(0xfff1dc, 80, 70, 1.6); p.position.set(x, 9.5, z); this.scene.add(p);
     }
     this.world = buildWorld(this.scene, first.mission);
     const caseMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.3, metalness: 0.5, emissive: 0x474fff, emissiveIntensity: 0.25 });
@@ -205,13 +209,18 @@ export class Game {
       if (!this.locked) return;
       // Chrome sometimes reports one huge jump right after the pointer is captured; drop it
       if (Math.abs(e.movementX) > 400 || Math.abs(e.movementY) > 400) return;
-      const k = 0.0022 * this.settings.sens;
+      const k = 0.0022 * this.settings.sens / this.zoomNow; // the sight slows the hand as much as it magnifies
       if (this.veh >= 0 && this.seat === 0) { this.camOffset -= e.movementX * k; this.pitch = Math.max(-0.6, Math.min(0.5, this.pitch - e.movementY * k)); return; }
       this.yaw -= e.movementX * k;
       this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch - e.movementY * k));
     });
-    this.on(document, "mousedown", (e: MouseEvent) => { if (this.locked && e.button === 0) { this.mouseDown = true; this.clicked = true; } });
-    this.on(document, "mouseup", (e: MouseEvent) => { if (e.button === 0) this.mouseDown = false; });
+    this.on(document, "mousedown", (e: MouseEvent) => {
+      if (!this.locked) return;
+      if (e.button === 0) { this.mouseDown = true; this.clicked = true; }
+      if (e.button === 2) this.aiming = true; // hold the right button: look through the sight
+    });
+    this.on(document, "mouseup", (e: MouseEvent) => { if (e.button === 0) this.mouseDown = false; if (e.button === 2) this.aiming = false; });
+    this.on(document, "contextmenu", (e: Event) => e.preventDefault());
     this.on(window, "wheel", (e: WheelEvent) => { if (this.locked) this.cycleWeapon(e.deltaY > 0 ? 1 : -1); }, { passive: true });
     this.on(window, "keydown", (e: KeyboardEvent) => {
       if (this.chatting) return;
@@ -265,7 +274,7 @@ export class Game {
     sens.value = String(this.settings.sens); vol.value = String(this.settings.vol); fov.value = String(this.settings.fov); show();
     this.on(sens, "input", () => { this.settings.sens = +sens.value; saveSettings(this.settings); show(); });
     this.on(vol, "input", () => { this.settings.vol = +vol.value; sfx.setVolume(this.settings.vol); saveSettings(this.settings); show(); });
-    this.on(fov, "input", () => { this.settings.fov = +fov.value; this.camera.fov = this.settings.fov; this.camera.updateProjectionMatrix(); saveSettings(this.settings); show(); });
+    this.on(fov, "input", () => { this.settings.fov = +fov.value; saveSettings(this.settings); show(); });
     this.on($("resume"), "click", () => { sfx.initAudio(); this.lock(); });
     this.on($("quit"), "click", () => this.quit());
   }
@@ -330,7 +339,7 @@ export class Game {
     this.mag[this.w]--;
     this.lastShotAt = now;
     const moving = Math.hypot(this.body.vx, this.body.vz) > 1.2 || !this.body.onGround;
-    const cone = w.spread + (moving ? w.moveSpread : 0);
+    const cone = (w.spread + (moving ? w.moveSpread : 0)) * (this.zoomK > 0.8 ? AIM_SPREAD : 1);
     const dirs = spreadDirs(this.yaw, this.pitch, cone, w.pellets, Math.random);
     const view = this.serverNow() - INTERP_S;
     this.link.send({ t: "shoot", w: this.w, yaw: this.yaw, pitch: this.pitch, dirs, view });
@@ -698,9 +707,18 @@ export class Game {
     // view model
     this.vmKick = Math.max(0, this.vmKick - dt * 9);
     const reloadK = this.reloadUntil ? Math.sin(Math.min(1, (nowS - this.reloadStart) / WEAPONS[this.w].reloadS) * Math.PI) : 0;
-    this.vm.visible = this.alive && !driving;
-    $("cross").hidden = driving;
-    this.vm.position.set(0.21 + Math.cos(this.bob) * 0.012 * Math.min(1, speed / 5), -0.2 + bobY * 0.5 - reloadK * 0.12, -0.38 + this.vmKick * 0.05);
+    // the sight: the right button narrows the view by the launcher's zoom; a scope (3x and up) fills the screen
+    const zoom = WEAPONS[this.w].zoom;
+    const wantAim = this.aiming && this.alive && !driving && zoom > 1 && !this.reloadUntil && this.latest?.phase !== "brief";
+    this.zoomK += ((wantAim ? 1 : 0) - this.zoomK) * Math.min(1, dt * 14);
+    this.zoomNow = 1 + (zoom - 1) * this.zoomK;
+    const fov = 2 * Math.atan(Math.tan(this.settings.fov * Math.PI / 360) / this.zoomNow) * 180 / Math.PI;
+    if (Math.abs(fov - this.camera.fov) > 0.01) { this.camera.fov = fov; this.camera.updateProjectionMatrix(); }
+    const scoped = zoom >= 3 && this.zoomK > 0.6;
+    $("scope").hidden = !scoped;
+    this.vm.visible = this.alive && !driving && !scoped;
+    $("cross").hidden = driving || scoped || !this.alive;
+    this.vm.position.set(0.21 * (1 - this.zoomK * 0.85) + Math.cos(this.bob) * 0.012 * Math.min(1, speed / 5), -0.2 + this.zoomK * 0.07 + bobY * 0.5 - reloadK * 0.12, -0.38 + this.vmKick * 0.05);
     this.vm.rotation.set(this.vmKick * 0.12 - reloadK * 0.7, 0, reloadK * 0.3);
     this.vmFlashT -= dt;
     this.vmFlash.visible = this.vmFlashT > 0;
@@ -867,7 +885,7 @@ export class Game {
     cancelAnimationFrame(this.raf);
     for (const d of this.disposers) d();
     if (document.pointerLockElement) document.exitPointerLock();
-    for (const id of ["hud", "pause", "board", "end", "death", "brief"]) $(id).hidden = true;
+    for (const id of ["hud", "pause", "board", "end", "death", "brief", "scope"]) $(id).hidden = true;
     $("feed").innerHTML = ""; $("chat").innerHTML = "";
     this.renderer.dispose();
   }

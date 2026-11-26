@@ -22,7 +22,7 @@ export const MAX_TEAM = 20;
 export const TEAM_NAMES = ["Pracownicy magazynu", "Technicy efectivo"] as const;
 export const TEAM_SHORT = ["Pracownicy", "Technicy"] as const;
 /** A round: the technicians have this long to connect, unless the server is already starting. */
-export const ROUND_S = 180;
+export const ROUND_S = 300;
 /** Rounds needed to win the match; the sides swap after SWAP_AFTER rounds. */
 export const ROUNDS_WIN = 4;
 export const SWAP_AFTER = 3;
@@ -47,6 +47,9 @@ const HIST = 48;
 const leadPos = [0, 0, 0];
 const tmpSeat = [0, 0, 0];
 const goalTmp = [0, 0];
+/** The technicians' routes west: way points as [x, z]; the flank's z is mirrored for the north and the south. */
+const ROUTE_MID = [[120, 2.5], [40, -12], [-45, 2.5]];
+const ROUTE_FLANK = [[170, 102.5], [20, 106], [-66, 100]];
 
 const BOT_NAMES = ["Zenek", "Halina", "Mirek", "Grażyna", "Waldek", "Bożena", "Rysiek", "Danuta", "Kazik", "Wiesia", "Janusz", "Krystyna", "Staszek", "Jadwiga", "Heniek", "Tereska", "Bogdan", "Irena"];
 const PICKUP_RESPAWN_S: Record<PickupKind, number> = { med: 20, ammo: 15, shotgun: 25, geo: 45 };
@@ -90,7 +93,9 @@ interface Brain {
   /** This life's job: work the mission (attack or guard the objective) or hunt the other team. */
   job: "mission" | "hunt"; station: number;
   /** The route a technician takes through the middle this life: −1 north floor, 0 main aisle, 1 south floor. */
-  lane: number; laneDone: boolean;
+  lane: number; wp: number;
+  /** A worker who walks between A and B instead of holding one: when they next change over. */
+  roverAt: number;
 }
 
 export type Team = 0 | 1;
@@ -195,7 +200,7 @@ export class Sim {
       brain: bot ? {
         path: null, pi: 0, goalX: 0, goalZ: 0, repathAt: 0, target: 0, reactAt: 0, strafe: 1, strafeUntil: 0,
         errYaw: 0, errPitch: 0, errUntil: 0, nextThink: 0, seenX: 0, seenZ: 0, seenT: -99, lastX: 0, lastZ: 0, stuckCheck: 0,
-        burstUntil: 0, pauseUntil: 0, jump: false, alertId: 0, alertUntil: 0, job: "mission", station: 0, lane: 0, laneDone: false,
+        burstUntil: 0, pauseUntil: 0, jump: false, alertId: 0, alertUntil: 0, job: "mission", station: 0, lane: 0, wp: 0, roverAt: 0,
       } : null,
     };
     this.players.set(p.id, p);
@@ -673,9 +678,10 @@ export class Sim {
     if (p.brain) {
       p.brain.path = null; p.brain.target = 0; p.brain.seenT = -99; p.brain.repathAt = 0;
       // most technicians go for the point; most workers guard A or B, the rest go looking for trouble
-      p.brain.job = this.rand() < (p.team === 1 ? 0.8 : 0.7) ? "mission" : "hunt";
+      p.brain.job = "mission";
+      p.brain.roverAt = this.rand() < 0.3 ? this.time + 20 + this.rand() * 20 : Infinity;
       p.brain.station = Math.floor(this.rand() * 2);
-      p.brain.lane = Math.floor(this.rand() * 3) - 1; p.brain.laneDone = false;
+      p.brain.lane = Math.floor(this.rand() * 3) - 1; p.brain.wp = 0;
     }
   }
 
@@ -787,9 +793,11 @@ export class Sim {
         else if (p.hp < 45) {
           const med = this.nearestPickup(p, "med");
           if (med) { gx = med.x; gz = med.z; need = need || Math.hypot(gx - br.goalX, gz - br.goalZ) > 1; }
-        } else if (br.job === "mission" && this.missionGoal(p, goalTmp)) {
-          // the mission comes first: the technicians go for the objective, the workers stand around it
-          if (Math.hypot(goalTmp[0] - br.goalX, goalTmp[1] - br.goalZ) > 1.5) { gx = goalTmp[0]; gz = goalTmp[1]; need = true; }
+        } else if (br.job === "mission") {
+          // everyone works the round: the technicians come up their route to the point, the workers hold A and B.
+          // Nobody goes looking for the other team, or all of them would meet in the middle of the hall
+          if (!this.missionGoal(p, goalTmp)) { br.path = null; need = false; } // busy at the point: stay put
+          else if (Math.hypot(goalTmp[0] - br.goalX, goalTmp[1] - br.goalZ) > 1.5) { gx = goalTmp[0]; gz = goalTmp[1]; need = true; }
         } else if (need) {
           // the hall is big: mostly head for where an enemy is, so the teams meet instead of wandering apart
           const roll = this.rand();
@@ -806,7 +814,7 @@ export class Sim {
         if (need || this.time >= br.repathAt) {
           br.goalX = gx; br.goalZ = gz;
           br.path = findPath(b.x, b.z, gx, gz); br.pi = 0;
-          br.repathAt = this.time + 3.5 + this.rand() * 1.5;
+          br.repathAt = this.time + 8 + this.rand() * 3;
         }
       }
       // stuck check once a second
@@ -923,17 +931,18 @@ export class Sim {
     if (p.team === 1) {
       // the case lies on the floor: whoever is near picks it up
       if (this.mission === "tags" && this.caseAt && Math.hypot(this.caseAt.x - b.x, this.caseAt.z - b.z) < 70) { out[0] = this.caseAt.x; out[1] = this.caseAt.z; return true; }
-      // through the middle by this life's route, so the push does not always come the same way
-      if (!br.laneDone) {
-        if (b.x < 12) br.laneDone = true;
-        else { out[0] = 8; out[1] = br.lane * 30 + (br.lane === 0 ? 2 : 0); if (freeAt(out[0], out[1])) return true; br.laneDone = true; }
-      }
+      // up this round's route (the north edge of the hall, the main aisle or the south edge) as far as the west
+      // racking, and only there turn for the point: the push comes from three sides, not through the middle
+      const route = br.lane === 0 ? ROUTE_MID : ROUTE_FLANK;
+      while (br.wp < route.length && (b.x < route[br.wp][0] + 4 || Math.hypot(route[br.wp][0] - b.x, route[br.wp][1] * br.lane - b.z) < 7)) br.wp++;
+      if (br.wp < route.length) { out[0] = route[br.wp][0]; out[1] = br.lane === 0 ? route[br.wp][1] : route[br.wp][1] * br.lane; return true; }
       const s = pts[this.botSite];
       // with the tags only the carrier goes to the point itself; the others cover it
       if (this.mission === "tags" && !p.carry) return post(s.x, s.z);
       out[0] = s.x; out[1] = s.z; return !p.acting;
     }
     // workers: split between A and B
+    if (this.time >= br.roverAt) { br.station++; br.roverAt = this.time + 20 + this.rand() * 20; }
     const s = pts[br.station % pts.length];
     return post(s.x, s.z);
   }

@@ -31,7 +31,7 @@ function noise(g: CanvasRenderingContext2D, w: number, h: number, amount: number
 // ------------------------------------------------------------------ floor
 
 function floorTexture() {
-  const PX = 16; // pixels per metre
+  const PX = 7; // pixels per metre (the whole floor is one texture: 3780 px across)
   const W = (HALL.x1 - HALL.x0) * PX, H = (HALL.z1 - HALL.z0) * PX;
   const X = (x: number) => (x - HALL.x0) * PX, Z = (z: number) => (z - HALL.z0) * PX;
   return canvasTex(W, H, (g) => {
@@ -47,7 +47,7 @@ function floorTexture() {
     }
     noise(g, W, H, 0.08, 60000);
     // expansion joints every 5 m
-    g.strokeStyle = "rgba(0,0,0,0.35)"; g.lineWidth = 1.5;
+    g.strokeStyle = "rgba(0,0,0,0.3)"; g.lineWidth = 1;
     for (let x = HALL.x0; x <= HALL.x1; x += 5) { g.beginPath(); g.moveTo(X(x), 0); g.lineTo(X(x), H); g.stroke(); }
     for (let z = HALL.z0; z <= HALL.z1; z += 5) { g.beginPath(); g.moveTo(0, Z(z)); g.lineTo(W, Z(z)); g.stroke(); }
     // zones: a light tint, a solid edge line, the name painted on the floor
@@ -64,7 +64,7 @@ function floorTexture() {
     g.fillStyle = "#111"; for (let x = X(hz.x0) - 40; x < X(hz.x1) + 40; x += 28) { g.beginPath(); g.moveTo(x, Z(hz.z0)); g.lineTo(x + 14, Z(hz.z0)); g.lineTo(x + 14 + 19, Z(hz.z0) + 0.8 * PX); g.lineTo(x + 19, Z(hz.z0) + 0.8 * PX); g.fill(); }
     g.restore();
     // yellow aisle lines in front of every rack and around stacks
-    g.strokeStyle = "rgba(240,196,0,0.85)"; g.lineWidth = 0.1 * PX;
+    g.strokeStyle = "rgba(240,196,0,0.85)"; g.lineWidth = 1.6;
     for (const b of BOXES) {
       if (b.kind !== "rack" && b.kind !== "stack" && b.kind !== "table") continue;
       const m = b.kind === "rack" ? 0.35 : 0.25;
@@ -72,23 +72,23 @@ function floorTexture() {
     }
     // walkway arrows along the main aisle
     g.fillStyle = "rgba(245,245,247,0.55)";
-    for (let x = HALL.x0 + 8; x < HALL.x1 - 4; x += 12) {
-      g.save(); g.translate(X(x), Z(0)); g.scale(PX / 16, PX / 16); g.beginPath(); g.moveTo(-18, -10); g.lineTo(6, -10); g.lineTo(6, -20); g.lineTo(26, 0); g.lineTo(6, 20); g.lineTo(6, 10); g.lineTo(-18, 10); g.closePath(); g.fill(); g.restore();
+    for (let x = HALL.x0 + 8; x < HALL.x1 - 4; x += 18) {
+      g.save(); g.translate(X(x), Z(0)); g.scale(PX / 10, PX / 10); g.beginPath(); g.moveTo(-18, -10); g.lineTo(6, -10); g.lineTo(6, -20); g.lineTo(26, 0); g.lineTo(6, 20); g.lineTo(6, 10); g.lineTo(-18, 10); g.closePath(); g.fill(); g.restore();
     }
-    g.strokeStyle = "rgba(245,245,247,0.5)"; g.setLineDash([0.9 * PX, 0.6 * PX]); g.lineWidth = 0.1 * PX;
+    g.strokeStyle = "rgba(245,245,247,0.5)"; g.setLineDash([0.9 * PX, 0.6 * PX]); g.lineWidth = 1.6;
     for (const z of [-4.2, 4.2]) { g.beginPath(); g.moveTo(X(HALL.x0), Z(z)); g.lineTo(X(HALL.x1), Z(z)); g.stroke(); }
     g.setLineDash([]);
     // zone names
     g.textAlign = "left"; g.textBaseline = "top";
     for (const zn of ZONES) {
-      g.font = `600 ${Math.round(2.2 * PX)}px Inter, -apple-system, sans-serif`;
+      g.font = `600 ${Math.round(4 * PX)}px Inter, -apple-system, sans-serif`;
       g.fillStyle = "rgba(245,245,247,0.32)";
       const tx = X(zn.x0) + 0.8 * PX, tz = Z(zn.z0) + (zn.name.startsWith("STREFA") ? 1.3 : 0.6) * PX;
       g.fillText(zn.name, tx, tz);
     }
     // pickup pads
     for (const p of PICKUPS) {
-      g.strokeStyle = "rgba(71,79,255,0.75)"; g.lineWidth = 0.08 * PX;
+      g.strokeStyle = "rgba(71,79,255,0.75)"; g.lineWidth = 1.5;
       g.beginPath(); g.arc(X(p.x), Z(p.z), 0.9 * PX, 0, Math.PI * 2); g.stroke();
     }
   });
@@ -233,13 +233,13 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
 
   // ceiling: trusses and lamp strips
   const trussMat = new THREE.MeshStandardMaterial({ color: 0x2a2c31, metalness: 0.6, roughness: 0.5 });
-  for (let x = HALL.x0 + 5; x < HALL.x1; x += 6.5) {
+  for (let x = HALL.x0 + 5; x < HALL.x1; x += 13) {
     const t = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.7, HALL.z1 - HALL.z0), trussMat); t.position.set(x, HALL.h + 0.2, 0); group.add(t);
   }
   const lamps = new Instancer(unitBox, new THREE.MeshBasicMaterial({ color: 0xf4f6ff }), false);
   const lampHousings = new Instancer(unitBox, new THREE.MeshStandardMaterial({ color: 0x1a1b1f }), false);
-  for (let x = HALL.x0 + 9; x < HALL.x1; x += 13) {
-    for (let z = HALL.z0 + 6.5; z < HALL.z1; z += 13) {
+  for (let x = HALL.x0 + 9; x < HALL.x1; x += 19.5) {
+    for (let z = HALL.z0 + 6.5; z < HALL.z1; z += 19.5) {
       lampHousings.add(x, HALL.h - 0.16, z, 2.8, 0.12, 0.42);
       lamps.add(x, HALL.h - 0.19, z, 2.6, 0.03, 0.3);
     }
@@ -266,6 +266,18 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
     if (r < 0.35) wrapped.add(x, y + 0.14, z, 1.14, h, 0.96, pick(LOAD_TINTS), ry);
     else pick(loads).add(x, y + 0.14, z, 1.1, h, 0.94, 0xffffff, ry);
   };
+  // the racks hold tens of thousands of loads: one wide load per bay side and level, drawn without casting shadows
+  const rackPallets = new Instancer(unitBox, palletMat, false);
+  const rackLoads = cardboard.map((map) => new Instancer(unitBox, new THREE.MeshStandardMaterial({ map, roughness: 0.85 }), false));
+  const rackWrapped = new Instancer(unitBox, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35, metalness: 0.1, transparent: true, opacity: 0.85 }), false);
+  const rackLoad = (x: number, y: number, z: number, w: number) => {
+    rackPallets.add(x, y, z, w, 0.14, 1.0, 0xb08a5c);
+    const r = Math.random();
+    if (r < 0.12) return;
+    const h = 0.7 + Math.random() * 0.75;
+    if (r < 0.35) rackWrapped.add(x, y + 0.14, z, w - 0.06, h, 0.96, pick(LOAD_TINTS));
+    else pick(rackLoads).add(x, y + 0.14, z, w - 0.1, h, 0.94);
+  };
   for (const b of BOXES) {
     if (b.kind !== "rack") continue;
     const len = b.x1 - b.x0, bays = Math.max(1, Math.round(len / 2.7)), bay = len / bays;
@@ -282,12 +294,7 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
     back.position.set((b.x0 + b.x1) / 2, b.y1 / 2, (b.z0 + b.z1) / 2); group.add(back);
     for (let i = 0; i < bays; i++) {
       for (const y of levels) {
-        for (const side of [-1, 1]) {
-          for (const k of [-0.5, 0.5]) {
-            if (bay < 2.4 && k > 0) continue;
-            loadOn(b.x0 + (i + 0.5 + k * 0.5) * bay, y + (y ? 0 : 0.02), (b.z0 + b.z1) / 2 + side * 0.6, 1.5);
-          }
-        }
+        for (const side of [-1, 1]) rackLoad(b.x0 + (i + 0.5) * bay, y + (y ? 0 : 0.02), (b.z0 + b.z1) / 2 + side * 0.6, bay - 0.3);
       }
     }
   }
@@ -464,6 +471,8 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
   }
 
   rackUp.build(group); beams.build(group); pallets.build(group); wrapped.build(group);
+  rackPallets.build(group); rackWrapped.build(group);
+  for (const l of rackLoads) l.build(group);
   for (const l of loads) l.build(group);
 
   // pickups
