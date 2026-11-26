@@ -12,8 +12,8 @@ import { setDynamicBoxes } from "../shared/physics";
 import type { Box } from "../shared/map";
 import { buildWorld, forkliftModel, type WorldHandle } from "./world";
 import { Human, TEAM_COLORS, TEAM_CSS, gunModel } from "./human";
-import { CONNECT_R, TEAM_NAMES, TEAM_SHORT } from "../shared/sim";
-import { layout, useLayout, LAYOUTS } from "../shared/map";
+import { ROUNDS_WIN, SITE_R, TEAM_NAMES, TEAM_SHORT } from "../shared/sim";
+import { sites, useLayout, LAYOUTS } from "../shared/map";
 import { STORIES } from "./story";
 import { Fx } from "./fx";
 import { drawMinimap } from "./minimap";
@@ -70,6 +70,8 @@ export class Game {
   /** Our own worker, drawn only while we drive (the chase camera sees us). */
   private selfHuman: Human | null = null;
   private myTeam = -1;
+  /** Our lobby team: it keeps its score when the roles swap at half time. */
+  private myGroup = 0;
   private endMvp = "";
   private room = "";
   private body: Body = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, onGround: true };
@@ -83,7 +85,12 @@ export class Game {
   private res: Record<WeaponId, number> = { rifle: 120, pistol: 999, shotgun: 0, grenade: 0 };
   /** Holding E on the server cable. */
   private acting = false;
-  private dropMeshes: THREE.Mesh[] = [];
+  private caseMesh: THREE.Mesh;
+  /** Who we watch while we are out, and when the next start-up beep is due. */
+  private specId = 0;
+  private specClick = false;
+  private beepAt = 0;
+  private bannerT = 0;
   private proj = new THREE.Vector3();
   private disposed = false;
   private owned = new Set<WeaponId>(["rifle", "pistol"]);
@@ -132,7 +139,7 @@ export class Game {
     }
     this.world = buildWorld(this.scene, first.mission);
     const caseMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.3, metalness: 0.5, emissive: 0x474fff, emissiveIntensity: 0.25 });
-    for (let i = 0; i < 8; i++) { const c = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.3, 0.3), caseMat); c.visible = false; this.scene.add(c); this.dropMeshes.push(c); }
+    this.caseMesh = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.3, 0.3), caseMat); this.caseMesh.visible = false; this.scene.add(this.caseMesh);
     this.fx = new Fx(this.scene, this.boxHit);
 
     // first-person view model
@@ -214,7 +221,7 @@ export class Game {
       if (e.code === "KeyR") this.reload();
       if (e.code === "KeyE" && !e.repeat) {
         // at the server a technician holds E to connect it; anywhere else E is the forklift
-        if (this.canConnect()) { this.acting = true; this.link.send({ t: "act", on: true }); }
+        if (this.canAct()) { this.acting = true; this.link.send({ t: "act", on: true }); }
         else this.link.send({ t: "use" });
       }
       if (e.code === "Digit1") this.switchTo("rifle");
@@ -313,6 +320,7 @@ export class Game {
   private tryFire() {
     const w = WEAPONS[this.w];
     const want = w.auto ? this.mouseDown : this.clicked;
+    this.specClick = this.clicked;
     this.clicked = false;
     if (!want || !this.alive || !this.locked || this.latest?.phase !== "play") return;
     const now = this.nowS;
@@ -338,12 +346,18 @@ export class Game {
     else if (this.mag[this.w] === 0) this.reload();
   }
 
-  /** A technician within reach of the server, on foot, in the server mission. */
-  private canConnect() {
+  /**
+   * What holding E would do here: a technician at A or B connects (with the case, when the mission is the tags), a
+   * worker at the point that is starting up disconnects it.
+   */
+  private canAct(): "plant" | "defuse" | null {
     const m = this.latest;
-    if (!m || m.mission !== "server" || m.phase !== "play" || this.myTeam !== 1 || !this.alive || this.veh >= 0) return false;
-    const s = layout().server;
-    return Math.hypot(this.body.x - s.x, this.body.z - s.z) <= CONNECT_R;
+    if (!m || m.phase !== "play" || !this.alive || this.veh >= 0) return null;
+    const pts = sites(m.mission);
+    const near = (i: number) => Math.hypot(this.body.x - pts[i].x, this.body.z - pts[i].z) <= SITE_R;
+    if (this.myTeam === 1 && m.obj.armed < 0 && (m.mission === "server" || m.me.carry) && (near(0) || near(1))) return "plant";
+    if (this.myTeam === 0 && m.obj.armed >= 0 && near(m.obj.armed)) return "defuse";
+    return null;
   }
 
   /** The loading screen: the mission's story scrolls up while the hall is built, then our own task. */
@@ -387,7 +401,7 @@ export class Game {
       this.body.x = me.x; this.body.y = me.y; this.body.z = me.z; this.body.vx = this.body.vy = this.body.vz = 0;
       if (respawned) { this.yaw = me.yaw; this.pitch = 0; }
     }
-    this.alive = me.alive;
+    this.alive = me.alive; this.myGroup = me.group & 1;
     this.owned = new Set(me.owned);
     // forklift: on getting into the driver's seat, or when the host overrules our driving, take its pose
     if (me.veh !== this.veh || me.seat !== this.seat || (me.veh >= 0 && me.seat === 0 && me.vrev !== this.vrev)) {
@@ -415,8 +429,8 @@ export class Game {
     if (prevPhase === "play" && m.phase === "end") this.showEnd(true);
     if (m.phase === "play") $("end").hidden = true;
     $("brief").hidden = m.phase !== "brief";
-    if (prevPhase === "brief" && m.phase === "play") this.toast(STORIES[m.mission].task[me.team & 1]);
-    if (this.acting && !this.canConnect()) { this.acting = false; this.link.send({ t: "act", on: false }); }
+
+    if (this.acting && !this.canAct()) { this.acting = false; this.link.send({ t: "act", on: false }); }
   }
 
   private onEvent(e: Ev) {
@@ -451,7 +465,7 @@ export class Game {
         }
         if (e.on === this.myId) {
           $("deathBy").textContent = e.by === this.myId ? "Upadek z wysokości" : `Trafił(a) cię: ${name(e.by)}`;
-          $("deathSub").textContent = `${WEAPONS[e.w].name}${e.head ? " · trafienie w kask" : ""}. Wracasz na halę za chwilę.`;
+          $("deathSub").textContent = `${WEAPONS[e.w].name}${e.head ? " · trafienie w kask" : ""}`;
         }
         break;
       }
@@ -467,21 +481,38 @@ export class Game {
         break;
       }
       case "obj": {
-        const who = name(e.id), mine = e.id === this.myId;
-        if (e.what === "connect") { this.feed(`<b style="color:${TEAM_CSS[1]}">Technicy</b> podłączają serwer`, true); if (this.myTeam === 0) { this.toast("Technicy są przy serwerze!"); sfx.alert(); } }
-        else if (e.what === "tagpick") { if (mine) { this.toast("Masz tagi zegarkowe. Zanieś je do stacji ładowania"); sfx.pickup(); } }
-        else if (e.what === "tagdrop") this.feed(`<b>${esc(who)}</b> upuszcza skrzynkę tagów`, mine);
-        else if (e.what === "tagseized") this.feed(`<b style="color:${TEAM_CSS[0]}">${esc(who)}</b> przejmuje skrzynkę tagów`, mine);
-        else if (e.what === "tagdeliver") { this.feed(`<b style="color:${TEAM_CSS[1]}">${esc(who)}</b> dostarcza tagi do stacji`, true); sfx.alert(); if (mine) this.toast("Tagi dostarczone"); }
+        const who = name(e.id), mine = e.id === this.myId, tags = this.latest?.mission === "tags";
+        const pt = (tags ? "stacja " : "serwer ") + "AB"[e.site];
+        if (e.what === "plant") { this.feed(`<b style="color:${TEAM_CSS[1]}">${esc(who)}</b> ${tags ? "montuje tagi" : "podłącza"}: ${pt}`, true); if (this.myTeam === 0) sfx.alert(); }
+        else if (e.what === "armed") { this.banner(tags ? `Tagi zamontowane: stacja ${"AB"[e.site]}` : `Serwer ${"AB"[e.site]} się uruchamia`, this.myTeam === 0 ? "Odłącz go, zanim skończy się odliczanie" : "Broń punktu do końca odliczania"); sfx.alert(); }
+        else if (e.what === "defuse") { this.feed(`<b style="color:${TEAM_CSS[0]}">${esc(who)}</b> odłącza: ${pt}`, true); if (this.myTeam === 1) sfx.alert(); }
+        else if (e.what === "casepick") { if (mine) { this.toast("Masz tagi zegarkowe. Zanieś je do stacji A albo B"); sfx.pickup(); } }
+        else if (e.what === "casedrop") this.feed(`<b>${esc(who)}</b> upuszcza skrzynkę tagów`, mine);
+        break;
+      }
+      case "round":
+        $("end").hidden = true;
+        if (e.swapped && e.n > 1 && this.latest && !this.latest.obj.swapped) this.banner("Zmiana stron", "Drużyny zamieniają się rolami");
+        break;
+      case "roundEnd": {
+        const tags = this.latest?.mission === "tags";
+        const why = e.reason === "plant" ? (tags ? "tagi działają" : "serwer uruchomiony") : e.reason === "defuse" ? (tags ? "tagi zdjęte" : "serwer odłączony")
+          : e.reason === "time" ? "czas minął" : "cała drużyna rywali wyeliminowana";
+        this.banner(`Rundę wygrywają ${e.winner === 0 ? "pracownicy" : "technicy"}`, `${why} · ${e.wins[this.myGroup]} : ${e.wins[1 - this.myGroup]}`);
+        if (e.group === this.myGroup) sfx.killConfirm(); else sfx.hurt();
         break;
       }
       case "end":
-        $("endTitle").textContent = e.reason === "server" ? "Serwer podłączony: technicy efectivo wygrywają"
-          : e.reason === "tags" ? "Tagi dostarczone: technicy efectivo wygrywają" : "Czas minął: pracownicy obronili halę";
+        $("endTitle").textContent = e.group === this.myGroup ? "Wygrana: twoja drużyna bierze mecz" : "Przegrana: mecz dla rywali";
         this.endMvp = e.mvp;
-        $("endSub").dataset.won = String(e.winner === this.myTeam);
         break;
     }
+  }
+
+  /** The big line in the middle of the screen: a point starting up, the end of a round. */
+  private banner(title: string, sub: string) {
+    $("bannerTitle").textContent = title; $("bannerSub").textContent = sub;
+    $("banner").hidden = false; this.bannerT = 4;
   }
 
   private feed(html: string, mine: boolean) {
@@ -509,7 +540,8 @@ export class Game {
     let html = "";
     for (const t of [this.myTeam & 1, (this.myTeam & 1) ^ 1]) {
       const list = [...this.names.values()].filter((p) => p.tm === t).sort((a, b) => b.k - a.k || a.d - b.d);
-      html += `<tr class="team"><th style="color:${TEAM_CSS[t]}"><span class="swatch" style="background:${TEAM_CSS[t]}"></span>${TEAM_NAMES[t]}${t === this.myTeam ? " · twoja drużyna" : ""}</th><th class="num" colspan="3" style="color:var(--text)">${score[t]} eliminacji</th></tr>`;
+      const wins = this.latest ? this.latest.obj.wins[this.latest.obj.swapped ? 1 - t : t] : 0;
+      html += `<tr class="team"><th style="color:${TEAM_CSS[t]}"><span class="swatch" style="background:${TEAM_CSS[t]}"></span>${TEAM_NAMES[t]}${t === this.myTeam ? " · twoja drużyna" : ""}</th><th class="num" colspan="3" style="color:var(--text)">${wins} rund · ${score[t]} eliminacji</th></tr>`;
       html += list.map((p) =>
         `<tr class="${p.id === this.myId ? "me" : ""}"><td>${esc(p.n)}${p.bot ? '<span class="botmark">BOT</span>' : ""}</td><td class="num">${p.k}</td><td class="num">${p.d}</td><td class="num">${(p.k / Math.max(1, p.d)).toFixed(2)}</td></tr>`).join("");
     }
@@ -526,9 +558,8 @@ export class Game {
     if (on) {
       $("endTable").innerHTML = this.boardHtml();
       const me = this.names.get(this.myId);
-      const s = this.latest?.score ?? [0, 0];
-      const won = $("endSub").dataset.won === "true";
-      $("endSub").textContent = `${won ? "Twoja drużyna wygrała." : "Twoja drużyna przegrała."} Eliminacje: ${TEAM_SHORT[0]} ${s[0]}, ${TEAM_SHORT[1]} ${s[1]}. Najlepszy na zmianie: ${this.endMvp || "–"}.` + (me ? ` Ty: ${me.k} eliminacji, ${me.d} zgonów.` : "");
+      const wn = this.latest?.obj.wins ?? [0, 0];
+      $("endSub").textContent = `Rundy: ${wn[this.myGroup]} : ${wn[1 - this.myGroup]}. Najlepszy w meczu: ${this.endMvp || "–"}.` + (me ? ` Ty: ${me.k} eliminacji, ${me.d} zgonów.` : "");
     }
   }
 
@@ -618,13 +649,30 @@ export class Game {
     }
     const bobY = Math.sin(this.bob * 2) * 0.035 * Math.min(1, speed / 6);
     this.shake = Math.max(0, this.shake - dt * 4);
-    const deadDrop = this.alive ? 0 : 1.1;
+    const deadDrop = 0;
     this.camera.position.set(this.body.x, this.body.y + EYE_H + bobY - deadDrop, this.body.z);
     this.camera.rotation.set(0, 0, 0);
     this.camera.rotation.order = "YXZ";
     this.camera.rotation.y = this.yaw + (Math.random() - 0.5) * this.shake * 0.01;
-    this.camera.rotation.x = (this.alive ? this.pitch : -0.35) + (Math.random() - 0.5) * this.shake * 0.01;
-    this.camera.rotation.z = this.alive ? 0 : 0.35;
+    this.camera.rotation.x = this.pitch + (Math.random() - 0.5) * this.shake * 0.01;
+    this.camera.rotation.z = 0;
+    if (!this.alive) {
+      // out for the round: watch a teammate from behind (left click picks the next one)
+      const mates = [...this.names.values()].filter((q) => q.alive && q.id !== this.myId && q.tm === this.myTeam);
+      const pool = mates.length ? mates : [...this.names.values()].filter((q) => q.alive && q.id !== this.myId);
+      if (this.specClick && pool.length) this.specId = pool[(pool.findIndex((q) => q.id === this.specId) + 1) % pool.length].id;
+      let tgt = pool.find((q) => q.id === this.specId);
+      if (!tgt && pool.length) { tgt = pool[0]; this.specId = tgt.id; }
+      const h = tgt ? this.humans.get(tgt.id) : undefined;
+      if (tgt && h) {
+        const p = h.root.position, cy = tgt.yaw;
+        const cx = p.x + Math.sin(cy) * 3.6, cz = p.z + Math.cos(cy) * 3.6;
+        const t = Math.min(1, 1 - this.wallHit(p.x, p.y + 1.7, p.z, cx, p.y + 2.6, cz));
+        this.camera.position.set(p.x + (cx - p.x) * t, p.y + 1.7 + 0.9 * t, p.z + (cz - p.z) * t);
+        this.camera.lookAt(p.x - Math.sin(cy) * 4, p.y + 1.5 + Math.sin(tgt.pitch) * 4, p.z - Math.cos(cy) * 4);
+        this.set("deathCount", `Obserwujesz: ${tgt.n} · LPM zmienia · wracasz w następnej rundzie`);
+      } else this.set("deathCount", "Wracasz w następnej rundzie");
+    }
     if (driving) {
       // the driver watches the forklift from behind; the mouse swings the view and it settles back
       this.camOffset *= Math.max(0, 1 - dt * 1.5);
@@ -730,23 +778,30 @@ export class Game {
     if (!m) return;
     const left = Math.ceil(m.left);
     const clock = `${String(Math.floor(left / 60)).padStart(2, "0")}:${String(left % 60).padStart(2, "0")}`;
-    const mt = this.myTeam & 1;
-    // the mission in one pill: what the technicians have done so far, and the time the workers still have to hold
-    const o = m.obj;
-    const state = "p" in o
-      ? `<span class="obj${o.on ? " live" : ""}">Serwer<em><i style="width:${Math.round(o.p * 100)}%"></i></em><b>${Math.round(o.p * 100)}%</b></span>`
-      : `<span class="obj">Tagi<b>${o.n} / ${o.need}</b></span>`;
-    this.set("score", `${state}<time>${m.phase === "play" ? clock : "--:--"}</time>`, true);
-    this.set("teamChip", `<i style="background:${TEAM_CSS[mt]}"></i>${TEAM_NAMES[mt]}<small>${mt === 0 ? "obrona" : "atak"}</small>`, true);
+    const mt = this.myTeam & 1, o = m.obj, tags = m.mission === "tags";
+    // the top pill: rounds won (ours first), the round clock, or the countdown of a point that is starting up
+    const mine = o.wins[this.myGroup], theirs = o.wins[1 - this.myGroup];
+    const mid = o.armed >= 0 && (m.phase === "play" || m.phase === "round")
+      ? `<time class="boot">${tags ? "Stacja" : "Serwer"} ${"AB"[o.armed]} · ${Math.ceil(o.boot)} s</time>`
+      : `<time>${m.phase === "play" ? clock : m.phase === "freeze" ? `Runda ${o.round} · ${Math.ceil(m.left)}` : `Runda ${o.round}`}</time>`;
+    this.set("score", `<span class="me"><i style="background:${TEAM_CSS[mt]}"></i>${mine}</span>${mid}<span>${theirs}<i style="background:${TEAM_CSS[1 - mt]}"></i></span>`, true);
+    this.set("teamChip", `<i style="background:${TEAM_CSS[mt]}"></i>${TEAM_NAMES[mt]}<small>${mt === 0 ? "obrona" : "atak"} · do ${ROUNDS_WIN} rund</small>`, true);
     $("carry").hidden = !m.me.carry;
-    // dropped cases on the floor
-    const drops = "drops" in o ? o.drops : [];
-    for (let k = 0; k < this.dropMeshes.length; k++) {
-      const dm = this.dropMeshes[k], d = drops[k];
-      dm.visible = !!d;
-      if (d) { dm.position.set(d[0], 0.2 + Math.sin(nowS * 3 + k) * 0.05, d[1]); dm.rotation.y = nowS + k; }
+    // connecting or disconnecting: one bar under the crosshair for whoever is at it (ours or theirs)
+    const prog = o.armed < 0 ? o.plant : o.defuse;
+    $("actBar").hidden = prog <= 0 || m.phase !== "play";
+    if (prog > 0) { ($("actBar").firstElementChild as HTMLElement).style.width = Math.round(prog * 100) + "%"; this.set("actText", o.armed < 0 ? (tags ? "Montowanie tagów" : "Podłączanie serwera") : (tags ? "Zdejmowanie tagów" : "Odłączanie serwera")); }
+    // the case of watch tags on the floor
+    this.caseMesh.visible = !!o.case;
+    if (o.case) { this.caseMesh.position.set(o.case[0], 0.22 + Math.sin(nowS * 3) * 0.05, o.case[1]); this.caseMesh.rotation.y = nowS; }
+    // a point that is starting up beeps, faster and faster
+    if (o.armed >= 0 && m.phase === "play" && nowS >= this.beepAt) {
+      const s = sites(m.mission)[o.armed];
+      this.beepAt = nowS + Math.max(0.12, o.boot / 40);
+      sfx.bootBeep(Math.hypot(s.x - this.body.x, s.z - this.body.z));
     }
-    this.updateMarker(m, drops);
+    if (this.bannerT > 0) { this.bannerT -= dt; if (this.bannerT <= 0) $("banner").hidden = true; }
+    this.updateMarker(m);
     if (!$("board").hidden && nowS - this.boardT > 0.5) { this.boardT = nowS; $("boardTable").innerHTML = this.boardHtml(); }
     const hp = Math.max(0, m.me.hp);
     this.set("hp", String(hp));
@@ -761,7 +816,8 @@ export class Game {
     }).join(""), true);
     const use = this.usable();
     // on board the prompt shows only for the first seconds: the ride itself needs no label
-    const prompt = this.acting ? "Podłączasz serwer… trzymaj" : this.canConnect() ? "Przytrzymaj: podłącz serwer"
+    const act = this.canAct();
+    const prompt = this.acting ? "" : act === "plant" ? (tags ? "Przytrzymaj: zamontuj tagi" : "Przytrzymaj: podłącz serwer") : act === "defuse" ? (tags ? "Przytrzymaj: zdejmij tagi" : "Przytrzymaj: odłącz serwer")
       : this.veh >= 0 && m.me.alive ? (nowS - this.rideT < 4 ? "Wysiądź" : "") : use ? (use.seat === 0 ? "Prowadź wózek" : "Wskocz na wózek") : "";
     $("usePrompt").hidden = !prompt;
     if (prompt) this.set("usePromptText", prompt);
@@ -775,30 +831,22 @@ export class Game {
     $("vignette").style.opacity = String(Math.max(this.hurtT * 1.4, hp < 30 && m.me.alive ? 0.35 + Math.sin(nowS * 4) * 0.1 : 0));
     if (this.toastT > 0) { this.toastT -= dt; if (this.toastT <= 0) $("toast").classList.remove("on"); }
     // death screen
-    $("death").hidden = m.me.alive || m.phase !== "play";
-    if (!m.me.alive) this.set("deathCount", `Następna fala za ${Math.ceil(m.me.respawnIn)} s`);
+    $("death").hidden = m.me.alive || (m.phase !== "play" && m.phase !== "round");
     if (m.phase === "end") this.set("endCount", `Powrót do lobby za ${Math.ceil(m.left)} s`);
     if (m.phase === "brief") this.set("briefCount", `Start za ${Math.ceil(m.left)} s`);
     // Live map
     $("geo").hidden = m.me.geo <= 0;
-    drawMinimap(this.mapCtx, m.players, [...this.vehPoses.values()], this.myId, this.myTeam, { x: this.body.x, z: this.body.z, yaw: this.yaw }, m.me.geo > 0, nowS, { mission: m.mission, drops, connecting: "on" in o && o.on });
+    drawMinimap(this.mapCtx, m.players, [...this.vehPoses.values()], this.myId, this.myTeam, { x: this.body.x, z: this.body.z, yaw: this.yaw }, m.me.geo > 0, nowS, { mission: m.mission, case: o.case, armed: o.armed });
   }
 
   /** The pointer to where we have to go: projected on the screen, pinned to its edge when the place is off it. */
-  private updateMarker(m: Extract<HostMsg, { t: "snap" }>, drops: [number, number][]) {
-    const l = layout();
-    let tx = l.server.x, tz = l.server.z, label = "Serwer";
-    if (m.mission === "tags") {
-      const nearest = (pts: { x: number; z: number }[]) => pts.reduce((a, b) => Math.hypot(a.x - this.body.x, a.z - this.body.z) <= Math.hypot(b.x - this.body.x, b.z - this.body.z) ? a : b);
-      const dropPts = drops.map(([x, z]) => ({ x, z }));
-      const carrier = m.players.find((p) => p.carry && p.alive && p.tm === 1);
-      let t: { x: number; z: number };
-      if (this.myTeam === 1) { if (m.me.carry) { t = nearest(l.stations); label = "Stacja"; } else { t = nearest([...dropPts, ...l.supply]); label = "Tagi"; } }
-      else if (dropPts.length) { t = nearest(dropPts); label = "Skrzynka"; }
-      else if (carrier) { t = carrier; label = "Tagi"; }
-      else { t = nearest(l.stations); label = "Stacja"; }
-      tx = t.x; tz = t.z;
-    }
+  private updateMarker(m: Extract<HostMsg, { t: "snap" }>) {
+    const pts = sites(m.mission), o = m.obj;
+    const d = (p: { x: number; z: number }) => Math.hypot(p.x - this.body.x, p.z - this.body.z);
+    // where to: the point that is starting up; else the case on the floor (technicians); else the nearer of A and B
+    let i = o.armed >= 0 ? o.armed : d(pts[0]) <= d(pts[1]) ? 0 : 1;
+    let tx = pts[i].x, tz = pts[i].z, label = "AB"[i];
+    if (o.armed < 0 && o.case && this.myTeam === 1) { tx = o.case[0]; tz = o.case[1]; label = "Tagi"; i = -1; }
     const el = $("marker");
     const dist = Math.hypot(tx - this.body.x, tz - this.body.z);
     el.hidden = m.phase !== "play" || dist < 4;

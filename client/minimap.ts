@@ -2,7 +2,7 @@
 // own tag, your group's tags always (their UWB tags are on our network), and enemies only while they are firing —
 // or all of them while efectivo GEO runs.
 
-import { BOXES, HALL, LAYOUT, ZONES, layout } from "../shared/map";
+import { BOXES, HALL, LAYOUT, ZONES, sites } from "../shared/map";
 import type { PlayerSnap } from "../shared/proto";
 import type { VehicleState } from "../shared/vehicle";
 
@@ -30,24 +30,20 @@ function drawBase(): HTMLCanvasElement {
 
 const TEAM_RGB = ["255,106,0", "71,79,255"];
 
-/** What the mission adds to the map. */
-export interface MapMission { mission: "server" | "tags"; drops: [number, number][]; connecting: boolean }
+/** What the round adds to the map: the case on the floor, the point that is starting up. */
+export interface MapMission { mission: "server" | "tags"; case: [number, number] | null; armed: number }
 
 export function drawMinimap(ctx: CanvasRenderingContext2D, players: PlayerSnap[], vehicles: VehicleState[], myId: number, myTeam: number, me: { x: number; z: number; yaw: number }, geo: boolean, t: number, mm: MapMission) {
   const base = bases[LAYOUT] ?? (bases[LAYOUT] = drawBase());
   ctx.drawImage(base, 0, 0);
-  // the mission: the server (it pulses while someone is on the cable), or the stations, the delivery point and any
-  // case lying on the floor
-  const l = layout();
-  const mark = (x: number, z: number, fill: string, r: number) => { ctx.fillStyle = fill; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.roundRect(X(x) - r, Z(z) - r, r * 2, r * 2, 3); ctx.fill(); ctx.stroke(); };
-  if (mm.mission === "server") {
-    if (mm.connecting) { const k = (t * 1.5) % 1; ctx.strokeStyle = `rgba(71,79,255,${1 - k})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(X(l.server.x), Z(l.server.z), 8 + k * 26, 0, Math.PI * 2); ctx.stroke(); }
-    mark(l.server.x, l.server.z, "#0f172a", 8);
-  } else {
-    for (const s of l.stations) mark(s.x, s.z, "#16a34a", 7);
-    for (const s of l.supply) mark(s.x, s.z, "#474fff", 7);
-    for (const [x, z] of mm.drops) mark(x, z, "#f59e0b", 5);
-  }
+  // points A and B (the one that is starting up pulses), and the case of tags when it lies on the floor
+  sites(mm.mission).forEach((p, i) => {
+    if (mm.armed === i) { const k = (t * 1.5) % 1; ctx.strokeStyle = `rgba(240,68,56,${1 - k})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(X(p.x), Z(p.z), 10 + k * 28, 0, Math.PI * 2); ctx.stroke(); }
+    ctx.fillStyle = mm.armed === i ? "#f04438" : "#0f172a"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(X(p.x) - 11, Z(p.z) - 11, 22, 22, 5); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#fff"; ctx.font = "700 15px Inter, system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("AB"[i], X(p.x), Z(p.z) + 1);
+  });
+  if (mm.case) { ctx.fillStyle = "#f59e0b"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(X(mm.case[0]), Z(mm.case[1]), 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
   // forklifts: small dark bodies, like the vehicle markers on the Live map
   for (const v of vehicles) {
     ctx.save(); ctx.translate(X(v.x), Z(v.z)); ctx.rotate(-v.yaw);

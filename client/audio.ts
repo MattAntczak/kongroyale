@@ -86,6 +86,12 @@ export function alert() {
   for (let i = 0; i < 3; i++) tone(t + i * 0.16, 1320, 1320, 0.1, 0.12, "square");
 }
 
+/** The beep of a point that is starting up; `dist` in metres. */
+export function bootBeep(dist = 0) {
+  if (!ctx) return;
+  tone(ctx.currentTime, 1900, 1900, 0.07, 0.22 / (1 + dist * 0.04), "square");
+}
+
 /** The forklift's reversing beep. */
 export function reverseBeep() {
   if (!ctx) return;

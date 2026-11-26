@@ -1,12 +1,13 @@
-// Headless check for efectivo ARENA. For each of the three hall configurations: every spawn, pickup and mission
-// object stands on free, reachable floor. Then bot-only shifts of both missions (no friendly fire, eliminations
-// happen, the shift ends with a winner), the lobby rules, the forklift, the perches and the cardboard grenade.
+// Headless check for efectivo ARENA. For each of the three hall configurations: every spawn, pickup and point
+// (A and B) stands on free, reachable floor. Then whole bot matches of both missions (no friendly fire, rounds end
+// every way they can, a team reaches the rounds it needs), the lobby rules, the forklift, the perches, connecting
+// and disconnecting a server, and the cardboard grenade.
 // Run with `npm run smoke`.
 
 import { LADDERS, LAYOUTS, PERCH_H, VEHICLE_SPAWNS, useLayout } from "./shared/map";
 import { blocked, stepBody } from "./shared/physics";
 import { findPath } from "./shared/nav";
-import { Sim, TICK_HZ, MISSION_TIME_S, BRIEF_S } from "./shared/sim";
+import { Sim, TICK_HZ, BRIEF_S, FREEZE_S, ROUNDS_WIN } from "./shared/sim";
 import { lobPitch } from "./shared/weapons";
 import type { Mission } from "./shared/proto";
 
@@ -20,8 +21,7 @@ LAYOUTS.forEach((l, li) => {
     ...l.spawns.map(([x, z], i) => [`spawn ${i}`, x, z] as [string, number, number]),
     ...l.pickups.map((p, i) => [`pickup ${i} ${p.kind}`, p.x, p.z] as [string, number, number]),
     ...l.vehicles.map((v, i) => [`forklift ${i}`, v.x, v.z] as [string, number, number]),
-    ...l.stations.map((s, i) => [`station ${i}`, s.x, s.z] as [string, number, number]),
-    ...l.supply.map((s, i) => [`supply ${i}`, s.x, s.z] as [string, number, number]),
+    ...l.stations.map((s, i) => [`station ${"AB"[i]}`, s.x, s.z] as [string, number, number]),
   ];
   let ok = 0;
   for (const [name, x, z] of pts) {
@@ -29,48 +29,54 @@ LAYOUTS.forEach((l, li) => {
     else if (!findPath(l.spawns[0][0], l.spawns[0][1], x, z)) fail(`layout ${l.name}: ${name} (${x}, ${z}) cannot be reached`);
     else ok++;
   }
-  // the server is a solid cabinet: the walk has to end right beside it
-  const path = findPath(l.spawns[12][0], l.spawns[12][1], l.server.x, l.server.z);
-  const end = path?.[path.length - 1];
-  if (!end || Math.hypot(end[0] - l.server.x, end[1] - l.server.z) > 2.2) fail(`layout ${l.name}: the server cannot be reached`);
+  // the servers are solid cabinets: the walk has to end right beside each
+  l.servers.forEach((sv, i) => {
+    const path = findPath(l.spawns[12][0], l.spawns[12][1], sv.x, sv.z);
+    const end = path?.[path.length - 1];
+    if (!end || Math.hypot(end[0] - sv.x, end[1] - sv.z) > 2.2) fail(`layout ${l.name}: server ${"AB"[i]} cannot be reached`);
+  });
   console.log(`layout ${l.name}: ${ok}/${pts.length} points free and reachable, ${l.boxes.filter((b) => b.kind === "rack").length} racks, ${l.ladders.length} perches`);
 });
 
-// ---- bot shifts: both missions, each configuration
-function shift(mission: Mission, layout: number, seed: number) {
+// ---- bot matches: whole matches of rounds
+function match(mission: Mission, layout: number, seed: number) {
   const sim = new Sim({ seed });
-  sim.config = { bots: [8, 8], mission, difficulty: "normal" };
+  sim.config = { bots: [6, 6], mission, difficulty: "normal" };
   sim.begin(layout);
-  let kills = 0, teamHits = 0, booms = 0, winner = -1, reason = "", endT = 0;
+  let kills = 0, teamHits = 0, done = false;
+  const reasons: Record<string, number> = { plant: 0, defuse: 0, time: 0, out: 0 };
+  const roleWins = [0, 0];
+  let wins = [0, 0];
   let tm = new Map<number, number>();
   const refresh = () => { const s = sim.snapshot(1); tm = new Map(); if (s && s.t === "snap") for (const p of s.players) tm.set(p.id, p.tm); };
   const t0 = performance.now();
-  const ticks = TICK_HZ * (BRIEF_S + MISSION_TIME_S + 5);
   let n = 0;
-  for (; n < ticks && winner < 0; n++) {
+  for (; n < TICK_HZ * 60 * 40 && !done; n++) {
     sim.step(1 / TICK_HZ);
-    if (n % 120 === 0) refresh();
+    if (n % 60 === 0) refresh();
     for (const e of sim.drainEvents()) {
       if (e.k === "kill") kills++;
-      if (e.k === "boom") booms++;
+      if (e.k === "round") refresh();
       if (e.k === "hit" && e.by !== e.on && tm.get(e.by) === tm.get(e.on)) teamHits++;
-      if (e.k === "end") { winner = e.winner; reason = e.reason; endT = sim.time - BRIEF_S; }
+      if (e.k === "roundEnd") { reasons[e.reason]++; roleWins[e.winner]++; }
+      if (e.k === "end") { done = true; wins = e.wins; }
     }
   }
   const us = (performance.now() - t0) / n * 1000;
-  const snap = sim.snapshot(1);
-  const obj = snap && snap.t === "snap" ? JSON.stringify(snap.obj) : "";
-  console.log(`  ${mission} on ${LAYOUTS[layout].name}: ${winner === 1 ? "technicians" : winner === 0 ? "workers" : "nobody"} win by ${reason} after ${endT.toFixed(0)} s, ${kills} eliminations, ${booms} grenades, ${us.toFixed(0)} µs per tick ${obj}`);
-  if (winner < 0) fail(`${mission} on ${LAYOUTS[layout].name} never ended`);
+  console.log(`  ${mission} on ${LAYOUTS[layout].name}: ${wins[0]} : ${wins[1]} in ${sim.round} rounds and ${(sim.time / 60).toFixed(1)} min; rounds won by workers ${roleWins[0]}, technicians ${roleWins[1]}; ended by connect ${reasons.plant}, disconnect ${reasons.defuse}, time ${reasons.time}, team out ${reasons.out}; ${kills} eliminations, ${us.toFixed(0)} µs per tick`);
+  if (!done) fail(`${mission} on ${LAYOUTS[layout].name}: the match never ended`);
+  if (Math.max(wins[0], wins[1]) !== ROUNDS_WIN) fail("the match did not end at the rounds needed");
   if (teamHits) fail(`friendly fire: ${teamHits} hits`);
   if (kills < 10) fail("too few eliminations: the bots are not fighting");
-  return winner;
+  return roleWins;
 }
-console.log("bot shifts, 8 v 8:");
-const wins = [0, 0];
-const SEEDS = process.argv.includes("--balance") ? [40, 41, 42] : [40];
-for (const seed of SEEDS) for (let l = 0; l < LAYOUTS.length; l++) for (const m of ["server", "tags"] as const) wins[shift(m, l, seed + l * 7)]++;
-console.log(`  workers ${wins[0]} : ${wins[1]} technicians`);
+console.log("bot matches, 6 v 6:");
+const role = [0, 0];
+const PLAN: [Mission, number][] = process.argv.includes("--balance")
+  ? [["server", 0], ["tags", 0], ["server", 1], ["tags", 1], ["server", 2], ["tags", 2], ["server", 0], ["tags", 1], ["server", 2]]
+  : [["server", 0], ["tags", 1], ["server", 2]];
+PLAN.forEach(([m, l], i) => { const r = match(m, l, 40 + i * 7); role[0] += r[0]; role[1] += r[1]; });
+console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
 
 // ---- the lobby: teams are chosen, only the host configures and starts, 20 a team at most
 {
@@ -95,7 +101,7 @@ console.log(`  workers ${wins[0]} : ${wins[1]} technicians`);
   const d = fs.addHuman("Kierowca", 0), g = fs.addHuman("Rzucający", 0);
   fs.config = { bots: [0, 0], mission: "server", difficulty: "normal" };
   fs.begin(0);
-  for (let i = 0; i < TICK_HZ * (BRIEF_S + 1); i++) fs.step(1 / TICK_HZ);
+  for (let i = 0; i < TICK_HZ * (BRIEF_S + FREEZE_S + 1); i++) fs.step(1 / TICK_HZ);
   const f0 = VEHICLE_SPAWNS[0];
   const P = (fs as unknown as { players: Map<number, { body: { x: number; z: number }; veh: number; seat: number }> }).players;
   for (const id of [d, g]) { const b = P.get(id)!.body; b.x = f0.x; b.z = f0.z + 1.8; }
@@ -137,24 +143,14 @@ console.log(`  workers ${wins[0]} : ${wins[1]} technicians`);
   const w = sim.addHuman("Pracownik", 0), t = sim.addHuman("Technik", 1);
   sim.config = { bots: [0, 0], mission: "server", difficulty: "normal" };
   sim.begin(0);
-  for (let i = 0; i < TICK_HZ * (BRIEF_S + 2); i++) sim.step(1 / TICK_HZ);
+  for (let i = 0; i < TICK_HZ * (BRIEF_S + FREEZE_S + 2); i++) sim.step(1 / TICK_HZ);
+  sim.drainEvents();
   const P = (sim as unknown as { players: Map<number, { body: { x: number; y: number; z: number }; hp: number; mag: { grenade: number } }> }).players;
-  const srv = LAYOUTS[0].server;
+  const srv = LAYOUTS[0].servers[1];
   const pt = P.get(t)!, pw = P.get(w)!;
-  // the technician holds E beside the server: the connection climbs; a worker far away cannot stop it
-  pt.body.x = srv.x + 1.6; pt.body.z = srv.z;
-  sim.receive(t, { t: "act", on: true });
-  for (let i = 0; i < TICK_HZ * 5; i++) sim.step(1 / TICK_HZ);
-  const s1 = sim.snapshot(t);
-  const prog = s1 && s1.t === "snap" && "p" in s1.obj ? s1.obj.p : 0;
-  // a worker cannot connect it
-  sim.receive(t, { t: "act", on: false });
-  pw.body.x = srv.x - 1.6; pw.body.z = srv.z; sim.receive(w, { t: "act", on: true });
-  for (let i = 0; i < TICK_HZ * 2; i++) sim.step(1 / TICK_HZ);
-  const s2 = sim.snapshot(t);
-  const prog2 = s2 && s2.t === "snap" && "p" in s2.obj ? s2.obj.p : 1;
-  // the grenade: thrown at the worker 12 m away, it bursts and hurts
-  pt.body.x = 64; pt.body.z = 0; pw.body.x = 76; pw.body.z = 0; // along the main aisle, in the open
+  const obj = () => { const s = sim.snapshot(t); return s && s.t === "snap" ? s.obj : null; };
+  // the grenade first: thrown at the worker 12 m away along the main aisle, it bursts and hurts
+  pt.body.x = 64; pt.body.z = 0; pw.body.x = 76; pw.body.z = 0;
   for (let i = 0; i < 10; i++) sim.step(1 / TICK_HZ);
   sim.receive(t, { t: "switch", w: "grenade" });
   for (let i = 0; i < 40; i++) sim.step(1 / TICK_HZ);
@@ -162,8 +158,28 @@ console.log(`  workers ${wins[0]} : ${wins[1]} technicians`);
   sim.receive(t, { t: "shoot", w: "grenade", yaw: -Math.PI / 2, pitch, dirs: [Math.cos(pitch), Math.sin(pitch), 0], view: sim.time });
   let boom = false;
   for (let i = 0; i < TICK_HZ * 3; i++) { sim.step(1 / TICK_HZ); for (const e of sim.drainEvents()) if (e.k === "boom") boom = true; }
-  console.log(`server: 5 s on the cable -> ${(prog * 100).toFixed(0)} %, a worker cannot add to it ${prog2 <= prog}; grenade burst ${boom}, worker health ${pw.hp}, grenades left ${pt.mag.grenade}`);
-  if (prog < 0.3 || prog2 > prog || !boom || pw.hp >= 100 || pt.mag.grenade !== 1) fail("server or grenade");
+  console.log(`grenade: burst ${boom}, worker health ${pw.hp}, grenades left ${pt.mag.grenade}`);
+  if (!boom || pw.hp >= 100 || pw.hp <= 0 || pt.mag.grenade !== 1) fail("grenade");
+  // a worker cannot connect; the technician lets go early and it starts over; then holds on and it starts up
+  pw.body.x = srv.x - 1.6; pw.body.z = srv.z; sim.receive(w, { t: "act", on: true });
+  for (let i = 0; i < TICK_HZ * 2; i++) sim.step(1 / TICK_HZ);
+  const workerPlant = obj()!.plant;
+  sim.receive(w, { t: "act", on: false });
+  pt.body.x = srv.x + 1.6; pt.body.z = srv.z;
+  sim.receive(t, { t: "act", on: true });
+  for (let i = 0; i < TICK_HZ * 2; i++) sim.step(1 / TICK_HZ);
+  const half = obj()!.plant;
+  sim.receive(t, { t: "act", on: false }); sim.step(1 / TICK_HZ);
+  const reset = obj()!.plant;
+  sim.receive(t, { t: "act", on: true });
+  for (let i = 0; i < TICK_HZ * 4.2; i++) sim.step(1 / TICK_HZ);
+  const armed = obj()!.armed;
+  // the worker disconnects it: the workers win the round
+  sim.receive(w, { t: "act", on: true });
+  let ended = "";
+  for (let i = 0; i < TICK_HZ * 8 && !ended; i++) { sim.step(1 / TICK_HZ); for (const e of sim.drainEvents()) if (e.k === "roundEnd") ended = `${e.reason} by role ${e.winner}`; }
+  console.log(`server B: a worker cannot connect ${workerPlant === 0}, half way ${(half * 100).toFixed(0)} %, letting go resets ${reset === 0}, starting up at point ${"AB"[armed] ?? "-"}, round ended: ${ended}, score ${sim.wins.join(" : ")}`);
+  if (workerPlant !== 0 || half < 0.4 || reset !== 0 || armed !== 1 || ended !== "defuse by role 0" || sim.wins[0] !== 1) fail("connecting and disconnecting");
 }
 
 console.log(bad ? `${bad} check(s) failed` : "all checks passed");

@@ -4,8 +4,8 @@
 // +X east, +Z south. The hall floor is y = 0.
 //
 // The warehouse workers hold the west (racking); the efectivo technicians arrive through the docks in the east.
-// A configuration also places the mission objects: the local server the technicians must reconnect, the charging
-// stations that take deliveries of watch tags, and the delivery point at the docks where the tags arrive.
+// A configuration also places the two points, A and B, a round is fought over: two local servers (the technicians
+// have to connect one) or two charging stations (they have to fit the watch tags on one).
 //
 // One configuration is current at a time: `useLayout(i)` swaps what BOXES, LADDERS and the rest point at (the
 // exports are live bindings). A host that runs several rooms calls it before it touches a room.
@@ -44,12 +44,10 @@ export interface Layout {
   spawns: [number, number][];
   pickups: PickupSpot[];
   vehicles: { x: number; z: number; yaw: number }[];
-  /** The local server (mission "server"). Also a solid box in `boxes`. */
-  server: Point;
-  /** Charging stations that take watch tags (mission "tags"). */
+  /** The two local servers, A and B (mission "server"). Also solid boxes in `boxes`. */
+  servers: Point[];
+  /** The two charging stations, A and B, where watch tags can be fitted (mission "tags"). */
   stations: Point[];
-  /** Where the tags arrive, by the docks. */
-  supply: Point[];
 }
 
 /** Inner extent of the hall; the walls sit just outside it. */
@@ -77,7 +75,7 @@ interface Cfg {
   eastPerch: [number, number][];
   /** Pallets left in the main aisle. */
   aisle: [number, number][];
-  server: [number, number];
+  servers: [number, number][];
   stations: [number, number][];
 }
 
@@ -150,9 +148,9 @@ function build(cfg: Cfg): Layout {
   // shipping: pallets staged in two lines in front of the docks
   for (const x of [100, 108]) for (let z = -56; z <= 56; z += 8) { if (Math.abs(z) >= 7) stack(x, z, true); }
 
-  // the local server: a cabinet the technicians have to reach
-  const server = { x: cfg.server[0], z: f * cfg.server[1] };
-  add("server", server.x, server.z, 1.0, 1.0, 2.1);
+  // the local servers A and B: cabinets the technicians have to reach
+  const servers = cfg.servers.map(([x, z]) => ({ x, z: f * z }));
+  for (const sv of servers) add("server", sv.x, sv.z, 1.0, 1.0, 2.1);
 
   const c1 = (cfg.westSegs[0][1] + cfg.westSegs[1][0]) / 2, c2 = (cfg.westSegs[1][1] + cfg.westSegs[2][0]) / 2;
   const e1 = cfg.eastSegs.length > 1 ? (cfg.eastSegs[0][1] + cfg.eastSegs[1][0]) / 2 : cfg.eastSegs[0][0] - 3;
@@ -169,9 +167,8 @@ function build(cfg: Cfg): Layout {
   ];
 
   return {
-    name: cfg.name, boxes, ladders, zones, server,
+    name: cfg.name, boxes, ladders, zones, servers,
     stations: cfg.stations.map(([x, z]) => ({ x, z: f * z })),
-    supply: [{ x: 113, z: -32.5 }, { x: 113, z: 32.5 }],
     spawns: [
       [-117, -50], [-117, -30], [-117, -10], [-117, 10], [-117, 30], [-117, 50], [c1, -8.6], [c1, 8.6], [c2, -8.6], [c2, 8.6],
       [116, -52], [116, -28], [116, -12], [116, 12], [116, 28], [116, 52], [95, -8.6], [95, 8.6], [e1, -8.6], [e1, 8.6],
@@ -200,7 +197,7 @@ export const LAYOUTS: readonly Layout[] = [
     centerRacks: false,
     eastRows: [18, 31, 44], eastSegs: [[40, 66], [70, 92]], eastPerch: [[44, 0], [18, 1]],
     aisle: [[-100, -3], [-70, 3.5], [-44, -3.5], [-12, 3], [12, -3.2], [34, 3.4], [58, -3], [84, 3.2], [104, -2.5]],
-    server: [-43, -27.75], stations: [[-56, 40.75], [-29, -36], [-64, -5]],
+    servers: [[-43, -27.75], [-43, 34.25]], stations: [[-56, -40.75], [-45, 21.25]],
   }),
   build({
     name: "B", flip: 1,
@@ -208,7 +205,7 @@ export const LAYOUTS: readonly Layout[] = [
     centerRacks: true,
     eastRows: [18, 31, 44], eastSegs: [[44, 62], [66, 92]], eastPerch: [[31, 1], [44, 0]],
     aisle: [[-104, 3], [-78, -4], [-50, 3.6], [-24, -3.6], [8, 3.8], [36, -3.6], [58, 3.4], [88, -3.4]],
-    server: [-47, 21.25], stations: [[-64, -21.25], [-94, 34.25], [-29, 5.5]],
+    servers: [[-47, -21.25], [-47, 27.75]], stations: [[-64, -34.25], [-48, 40.75]],
   }),
   build({
     name: "C", flip: -1,
@@ -216,7 +213,7 @@ export const LAYOUTS: readonly Layout[] = [
     centerRacks: false,
     eastRows: [24.5, 40], eastSegs: [[44, 92]], eastPerch: [[24.5, 0], [40, 0]],
     aisle: [[-96, 3.2], [-66, -3.4], [-40, 3.4], [-14, -3.2], [14, 3], [30, -3.4], [60, 3], [86, -3.2], [104, 2.6]],
-    server: [-41, 47.25], stations: [[-78, -14.75], [-29, 36], [-100, -3.5]],
+    servers: [[-41, 47.25], [-41, -21.25]], stations: [[-52, 34.25], [-52, -34.25]],
   }),
 ];
 
@@ -235,6 +232,9 @@ export let VEHICLE_SPAWNS: readonly { x: number; z: number; yaw: number }[] = LA
 
 /** The current configuration. */
 export const layout = () => LAYOUTS[LAYOUT];
+
+/** The two points, A and B, the round is fought over: the servers, or the charging stations. */
+export const sites = (mission: "server" | "tags"): readonly Point[] => mission === "server" ? LAYOUTS[LAYOUT].servers : LAYOUTS[LAYOUT].stations;
 
 /** Make configuration `i` the current one. Cheap: it only swaps what the exports point at. */
 export function useLayout(i: number) {

@@ -30,7 +30,7 @@ a.ws.send(JSON.stringify({ t: "start" }));
 await sleep(500);
 console.log("phase", a.snap.phase, "layout", a.snap.layout, "mission", a.snap.mission, "players", a.snap.players.length);
 check(a.snap.phase === "brief" && a.snap.players.length === 4, "the shift starts with the briefing and two bots");
-while (a.snap.phase === "brief") await sleep(500);
+while (a.snap.phase !== "play") await sleep(500); // the briefing, then the freeze before round 1
 const { useLayout } = await import("./shared/map");
 useLayout(a.snap.layout);
 async function walkTo(c: ReturnType<typeof client>, tx: number, tz: number) {

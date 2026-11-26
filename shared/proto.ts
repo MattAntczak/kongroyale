@@ -5,7 +5,7 @@ import type { PickupKind } from "./map";
 import type { WeaponId } from "./weapons";
 
 export type Difficulty = "easy" | "normal" | "hard";
-/** "server": the technicians reconnect the local server. "tags": they deliver cases of watch tags. */
+/** "server": the technicians connect a local server at A or B. "tags": they fit the watch tags at a station. */
 export type Mission = "server" | "tags";
 
 /** What the host of a room sets in the lobby. */
@@ -16,8 +16,18 @@ export interface Config {
   difficulty: Difficulty;
 }
 
-/** Mission state: the server connection (0…1, and whether someone is on it now), or the tag deliveries. */
-export type ObjSnap = { p: number; on: boolean } | { n: number; need: number; drops: [number, number][] };
+/** The state of the round. */
+export interface ObjSnap {
+  round: number;
+  /** Rounds won by each lobby team, and whether the teams have traded roles (second half). */
+  wins: [number, number]; swapped: boolean;
+  /** Progress (0…1) of a connection being made, and of a disconnection. */
+  plant: number; defuse: number;
+  /** The point that is starting up (0 = A, 1 = B, -1 = none) and the seconds until it is up. */
+  armed: number; boot: number;
+  /** The case of watch tags when it lies on the floor. */
+  case: [number, number] | null;
+}
 
 // client -> host
 export type ClientMsg =
@@ -40,8 +50,8 @@ export type ClientMsg =
 
 export interface PlayerSnap {
   id: number; n: string; bot: boolean; c: number;
-  /** 0 = warehouse workers, 1 = efectivo technicians. */
-  tm: number;
+  /** Role this half: 0 = warehouse workers, 1 = efectivo technicians. `g` is the lobby team (it never changes). */
+  tm: number; g: number;
   /** Forklift ridden (-1 on foot) and seat (0 driver, 1 thrower). */
   veh: number; seat: number;
   /** Carrying a case of watch tags: their UWB signal shows on everyone's Live map. */
@@ -59,14 +69,14 @@ export interface VehicleSnap {
 }
 
 export interface SelfSnap {
-  hp: number; alive: boolean; w: WeaponId; team: number;
+  hp: number; alive: boolean; w: WeaponId; team: number; group: number;
   veh: number; seat: number;
   /** Revision of our forklift's pose: when it changes, the driver takes the host's pose. */
   vrev: number;
   mag: Record<WeaponId, number>; res: Record<WeaponId, number>; owned: WeaponId[];
   /** Bumped every respawn and every forced correction: the client takes the host's position when it changes. */
   spawn: number; x: number; y: number; z: number; yaw: number;
-  reloading: boolean; respawnIn: number; geo: number; killedBy: string; carry: boolean;
+  reloading: boolean; geo: number; killedBy: string; carry: boolean;
 }
 
 export type Ev =
@@ -80,14 +90,18 @@ export type Ev =
   | { k: "chat"; name: string; text: string }
   /** A cardboard grenade burst here. */
   | { k: "boom"; x: number; y: number; z: number }
-  | { k: "obj"; what: "connect" | "tagpick" | "tagdrop" | "tagseized" | "tagdeliver"; id: number }
-  | { k: "end"; /** 0 = the workers held the hall, 1 = the technicians did the job. */ winner: number; reason: "server" | "tags" | "time"; mvp: string }
+  | { k: "obj"; what: "plant" | "armed" | "defuse" | "defused" | "casepick" | "casedrop"; id: number; /** 0 = A, 1 = B */ site: number }
+  | { k: "round"; n: number; swapped: boolean }
+  /** `winner` is the role that won the round (0 workers, 1 technicians), `group` the lobby team that got the point. */
+  | { k: "roundEnd"; winner: number; group: number; reason: "plant" | "defuse" | "time" | "out"; wins: [number, number] }
+  /** The match is over: the lobby team that won it. */
+  | { k: "end"; group: number; wins: [number, number]; mvp: string }
   | { k: "start"; layout: number; mission: Mission }
   | { k: "lobby" };
 
 // host -> client
 export type HostMsg =
   | { t: "welcome"; id: number; room: string }
-  | { t: "snap"; time: number; phase: "lobby" | "brief" | "play" | "end"; left: number; layout: number; mission: Mission; obj: ObjSnap; config: Config; host: number; /** Team eliminations [Grupa A, Grupa B]. */ score: [number, number]; players: PlayerSnap[]; vehicles: VehicleSnap[]; pickups: boolean[]; me: SelfSnap }
+  | { t: "snap"; time: number; phase: "lobby" | "brief" | "freeze" | "play" | "round" | "end"; left: number; layout: number; mission: Mission; obj: ObjSnap; config: Config; host: number; /** Team eliminations [Grupa A, Grupa B]. */ score: [number, number]; players: PlayerSnap[]; vehicles: VehicleSnap[]; pickups: boolean[]; me: SelfSnap }
   | { t: "ev"; evs: Ev[] }
   | { t: "error"; text: string };

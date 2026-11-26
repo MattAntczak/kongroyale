@@ -195,6 +195,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .hud-top .obj em i { display: block; width: 0; height: 100%; border-radius: 6px; background: var(--blue-500); }
 .hud-top .obj.live em i { background: #fff; }
 .hud-top .obj.live { animation: blink 0.8s ease-in-out infinite; }
+#actBar { position: absolute; left: 50%; top: calc(50% + 56px); width: 240px; margin-left: -120px; height: 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.25); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4); }
+#actBar i { display: block; height: 100%; width: 0; border-radius: 10px; background: #fff; }
+#actBar span { position: absolute; left: 0; right: 0; top: 16px; text-align: center; font-size: 13px; font-weight: 600; }
+#banner { position: absolute; left: 50%; top: 22%; transform: translateX(-50%); display: grid; gap: 4px; justify-items: center; padding: 14px 28px; border-radius: 12px; background: rgba(15, 23, 42, 0.75); text-shadow: none; white-space: nowrap; }
+#banner b { font-size: 26px; font-weight: 700; }
+#banner span { font-size: 15px; opacity: 0.85; }
+.hud-top time.boot { color: #fff; background: var(--red-500); padding: 2px 10px; border-radius: 10px; font-weight: 600; animation: blink 0.8s ease-in-out infinite; }
 #marker { position: absolute; left: 0; top: 0; display: grid; justify-items: center; gap: 4px; margin: -20px 0 0 -50px; width: 100px; font-size: 12px; font-weight: 600; }
 #marker i { width: 12px; height: 12px; border: 2px solid #fff; background: var(--blue-500); transform: rotate(45deg); box-shadow: 0 0 6px rgba(0, 0, 0, 0.6); }
 
@@ -225,11 +232,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .sliders label { display: grid; grid-template-columns: 140px 1fr 48px; align-items: center; gap: 12px; font-size: 14px; color: var(--text-2); }
 .sliders output { font-size: 14px; font-weight: 500; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
 input[type="range"] { accent-color: var(--blue-500); width: 100%; }
-#death { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; pointer-events: none; background: radial-gradient(ellipse at center, rgba(0, 15, 35, 0.1), rgba(0, 15, 35, 0.6)); }
-#death .card { width: min(420px, calc(100vw - 32px)); padding: 24px; text-align: left; box-shadow: var(--shadow-lg); }
-#death h2 { margin: 0 0 4px; font-size: 20px; line-height: 28px; font-weight: 600; color: var(--text-strong); }
-#death p { margin: 0; color: var(--muted); }
-#death .count { margin-top: 16px; }
+/* out for the round: a strip at the bottom, the view stays free to watch a teammate */
+#death { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 6; display: grid; gap: 2px; justify-items: center; padding: 10px 18px; border-radius: 10px; background: rgba(15, 23, 42, 0.7); color: #fff; pointer-events: none; text-align: center; font-size: 13px; }
+#death b { font-size: 16px; font-weight: 600; }
+#death span { opacity: 0.8; }
 table.board { width: 100%; border-collapse: collapse; font-size: 14px; text-align: left; }
 table.board th { font-size: 12px; font-weight: 500; color: var(--muted); padding: 8px 12px; background: var(--app-bg); border-bottom: 1px solid var(--border); }
 table.board td { padding: 10px 12px; border-bottom: 1px solid var(--border-soft); color: var(--text-2); }

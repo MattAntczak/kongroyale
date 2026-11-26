@@ -4,15 +4,21 @@ Bitwa na kartony w magazynie: **pracownicy magazynu kontra technicy efectivo**. 
 a pokoje online obsługuje mały serwer Node.js z WebSocketami. Tryb z botami działa w całości w przeglądarce.
 
 - **Dwie drużyny, do 20 na 20:**
-  - Pracownicy magazynu (pomarańczowe kamizelki) bronią hali.
-  - Technicy efectivo (niebieskie kamizelki) przyjeżdżają od ramp i wykonują misję.
+  - Pracownicy magazynu (pomarańczowe kamizelki) bronią punktów A i B.
+  - Technicy efectivo (niebieskie kamizelki) przyjeżdżają od ramp i atakują.
+- **Rundy jak w CS, z serwerem i tagami zamiast bomby:**
+  - Technik przytrzymuje E przy punkcie A albo B przez 4 sekundy: podłącza serwer albo montuje tagi zegarkowe.
+  - Potem trwa 40 sekund uruchamiania. Pracownicy muszą w tym czasie przytrzymać E przy tym punkcie przez 7 sekund,
+    żeby wszystko odłączyć. Puszczenie E zaczyna od nowa.
+  - Rundę wygrywa też drużyna, która wyeliminuje całą drugą. Gdy minie 3 minuty bez podłączenia, wygrywają pracownicy.
+  - W trakcie rundy nikt nie wraca do gry. Wyeliminowany gracz ogląda kolegów z drużyny.
+  - Mecz trwa do 4 wygranych rund, a po trzeciej rundzie drużyny zamieniają się rolami.
 - **Dwie misje:**
-  - *Serwer lokalny:* pracownicy odłączyli serwer. Technicy muszą dojść do szafy i przytrzymać E przez 12 sekund.
-    Pracownicy wygrywają, gdy minie 7 minut.
-  - *Tagi zegarkowe:* technicy noszą skrzynki z tagami z dostawy przy rampie do stacji ładowania. Potrzeba pięciu
-    dostaw. Kto niesie tagi, jest stale widoczny na mapie Live. Upuszczoną skrzynkę pracownicy mogą przejąć.
-- **Odprawa zamiast ekranu ładowania:** przed każdą zmianą przewija się historia misji i zadanie twojej drużyny.
-- **Lobby ze slotami:** widać obie drużyny, wybierasz stronę i liczbę botów w każdej. Online zmianę ustawia i zaczyna
+  - *Serwer lokalny:* każdy technik może podłączyć jeden z dwóch serwerów.
+  - *Tagi zegarkowe:* skrzynkę z tagami niesie jeden technik i widać go stale na mapie Live. Po jego eliminacji
+    skrzynka leży na podłodze, aż podniesie ją inny technik.
+- **Odprawa zamiast ekranu ładowania:** przed meczem przewija się historia misji i zadanie twojej drużyny.
+- **Lobby ze slotami:** widać obie drużyny, wybierasz stronę i liczbę botów w każdej. Online mecz ustawia i zaczyna
   gospodarz, czyli pierwsza osoba w hali.
 - **Hala 240 × 130 m (31 200 m²) w trzech konfiguracjach,** losowanych przy każdej zmianie: klasyczna, z regałami
   buforowymi na środku i lustrzana. Ścianki działowe dzielą środek hali na trzy trasy podejścia.
@@ -21,7 +27,6 @@ a pokoje online obsługuje mały serwer Node.js z WebSocketami. Tryb z botami dz
 - **Cztery sloty:** Kartonomiot (serie), Paczkownik (pojedyncze paczki), Paletówka (garść paczek, do znalezienia na
   hali) i kartonowy granat (rzucany łukiem, razi rywali w promieniu 6,5 m). Kartony naprawdę lecą, a zamiast
   wystrzału słychać piknięcie skanera kodów.
-- **Powroty falami:** wyeliminowani gracze wracają razem, pracownicy co 14 s, technicy co 9 s.
 - **Wózki widłowe dla dwóch osób (6 na hali):** pierwszy gracz, który naciśnie E, prowadzi. Drugi wskakuje na tylny
   podest i rzuca. Karoseria osłania nogi, a rzucający stoi odsłonięty.
 - **Mapa Live:** pokazuje twoją drużynę, wózki i cel misji, a rywali tylko wtedy, gdy rzucają.
@@ -42,12 +47,12 @@ Wersja produkcyjna: najpierw `npm run build`, potem `npm start`. To uruchamia se
 
 Testy: `npm test` uruchamia typecheck oraz test bez grafiki. Ten test sprawdza:
 - czy w każdej z trzech konfiguracji spawny, znajdźki i obiekty misji są osiągalne,
-- czy zmiany samych botów w obu misjach kończą się wynikiem i nie ma ognia w swoich,
+- czy całe mecze samych botów kończą się wynikiem do 4 rund i nie ma ognia w swoich,
 - zasady lobby (tylko gospodarz ustawia i zaczyna, najwyżej 20 osób w drużynie),
-- wózek widłowy, wejście na pomost, podłączanie serwera i granat.
+- wózek widłowy, wejście na pomost, podłączanie i odłączanie serwera oraz granat.
 
 `npm run check:online` przechodzi lobby, odprawę i jazdę wózkiem we dwóch na prawdziwym serwerze.
-`npx tsx smoke.ts --balance` rozgrywa więcej zmian botów i pokazuje, kto wygrywa.
+`npx tsx smoke.ts --balance` rozgrywa więcej meczów botów i pokazuje, kto wygrywa rundy.
 
 ## Sterowanie
 
@@ -58,7 +63,7 @@ Testy: `npm test` uruchamia typecheck oraz test bez grafiki. Ten test sprawdza:
 | Shift, Spacja | Sprint, skok na niskie palety |
 | R | Przeładowanie |
 | 1 2 3 4 | Kartonomiot, Paczkownik, Paletówka, kartonowy granat |
-| E | Wózek widłowy: wsiądź, wskocz na podest, wysiądź. Przy serwerze przytrzymaj: podłączanie |
+| E | Wózek widłowy: wsiądź, wskocz na podest, wysiądź. Przy punkcie A lub B przytrzymaj: podłączanie albo odłączanie |
 | Tab | Tablica wyników |
 | T | Czat |
 | Esc | Pauza: czułość, głośność, pole widzenia |

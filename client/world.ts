@@ -407,13 +407,15 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
     const m = new THREE.Mesh(new THREE.RingGeometry(r - 0.12, r, 48), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, side: THREE.DoubleSide }));
     m.rotation.x = -Math.PI / 2; m.position.set(x, 0.03, z); group.add(m);
   };
+  let serverNo = -1;
   for (const b of BOXES) {
     if (b.kind !== "server") continue;
+    serverNo++;
     const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2;
     const cab = new THREE.Mesh(new THREE.BoxGeometry(b.x1 - b.x0, b.y1, b.z1 - b.z0), new THREE.MeshStandardMaterial({ color: 0x0c0d10, roughness: 0.35, metalness: 0.7 }));
     cab.position.set(cx, b.y1 / 2, cz); cab.castShadow = cab.receiveShadow = true; group.add(cab);
     for (const [dx, dz, ry] of [[0.51, 0, Math.PI / 2], [-0.51, 0, -Math.PI / 2], [0, 0.51, 0], [0, -0.51, Math.PI]] as const) {
-      const label = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.2), new THREE.MeshBasicMaterial({ map: labelTexture("efectivo · SERWER", "#000000", "#f5f5f7", 512, 128, 44) }));
+      const label = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.2), new THREE.MeshBasicMaterial({ map: labelTexture(`efectivo · SERWER ${"AB"[serverNo]}`, "#000000", "#f5f5f7", 512, 128, 40) }));
       label.position.set(cx + dx, 1.8, cz + dz); label.rotation.y = ry; group.add(label);
       for (let k = 0; k < 5; k++) {
         const led = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.035), accentMat);
@@ -427,26 +429,17 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
   if (mission === "tags") {
     const caseMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.3, metalness: 0.5 });
     const dockMat = new THREE.MeshStandardMaterial({ color: 0xf5f5f7, roughness: 0.4 });
-    for (const st of layout().stations) {
+    layout().stations.forEach((st, si) => {
       const base = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.0, 0.8), dockMat); base.position.set(st.x, 0.5, st.z); base.castShadow = base.receiveShadow = true; group.add(base);
       // rows of watch tags on their chargers: a black face on a strap, a blue dot when charged
       for (let i = 0; i < 6; i++) for (let j = 0; j < 2; j++) {
         const tag = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.03, 0.12), caseMat); tag.position.set(st.x - 0.62 + i * 0.25, 1.02, st.z - 0.18 + j * 0.36); group.add(tag);
         const dot = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.035, 0.04), accentMat); dot.position.copy(tag.position); dot.position.y += 0.005; group.add(dot); if ((i + j) % 2) blink.push(dot);
       }
-      const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.3), new THREE.MeshBasicMaterial({ map: labelTexture("STACJA TAGÓW", "#16a34a", "#ffffff", 512, 112, 56), side: THREE.DoubleSide }));
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.3), new THREE.MeshBasicMaterial({ map: labelTexture(`STACJA ${"AB"[si]}`, "#16a34a", "#ffffff", 512, 112, 60), side: THREE.DoubleSide }));
       sign.position.set(st.x, 1.75, st.z); group.add(sign);
-      ring(st.x, st.z, 2.6, 0x16a34a);
-    }
-    for (const sp of layout().supply) {
-      for (const [dx, dy, dz] of [[0, 0, 0], [0.5, 0, 0.1], [0.2, 0.3, 0.05], [-0.45, 0, -0.1]]) {
-        const c = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.3, 0.3), caseMat); c.position.set(sp.x + dx, 0.15 + dy, sp.z + dz); c.castShadow = true; group.add(c);
-        const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.445, 0.04, 0.305), accentMat); stripe.position.set(sp.x + dx, 0.2 + dy, sp.z + dz); group.add(stripe);
-      }
-      const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.3), new THREE.MeshBasicMaterial({ map: labelTexture("DOSTAWA TAGÓW", "#474fff", "#ffffff", 512, 100, 52), side: THREE.DoubleSide }));
-      sign.position.set(sp.x, 1.6, sp.z); sign.rotation.y = Math.PI / 2; group.add(sign);
-      ring(sp.x, sp.z, 2.6, ACCENT);
-    }
+      ring(st.x, st.z, 3, 0x16a34a);
+    });
   }
 
   // wire cage

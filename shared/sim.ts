@@ -1,13 +1,15 @@
-// The efectivo ARENA host: the warehouse workers (team 0, defending) against the efectivo technicians (team 1,
-// attacking) over one mission in one of three hall configurations. A room goes lobby -> briefing -> play -> end and
-// back to the lobby. The host owns health, ammo, kills, pickups, respawns, the mission and the bots. The same class runs inside the Node server (online rooms) and inside the browser (bot
+// The efectivo ARENA host: the warehouse workers (role 0, defending) against the efectivo technicians (role 1,
+// attacking), played in rounds like a bomb-defusal match. The technicians connect a server (or fit the watch tags)
+// at point A or B; it then takes BOOT_S to start, and the workers have that long to disconnect it. Nobody comes back
+// during a round; a round also ends when a whole team is out. The sides swap at half time, the first to ROUNDS_WIN
+// rounds wins. A room goes lobby -> briefing -> rounds (freeze, play, round end) -> end and back to the lobby. The host owns health, ammo, kills, pickups, respawns, the mission and the bots. The same class runs inside the Node server (online rooms) and inside the browser (bot
 // matches), so both play by identical rules.
 //
 // Authority: a human's movement is predicted by their own client and sent here; the host checks every step against
 // the walls and a speed limit and sends a correction when one fails. Shots are decided here: each one launches real
 // cardboard boxes that fly tick by tick, and a box tests players where the shooter saw them (up to 300 ms back).
 
-import { BOXES, PICKUPS, SPAWNS, HALL, LAYOUTS, VEHICLE_SPAWNS, layout, useLayout, type Box as HallBox, type PickupKind, type PickupSpot } from "./map";
+import { BOXES, PICKUPS, SPAWNS, HALL, LAYOUTS, VEHICLE_SPAWNS, sites, useLayout, type Box as HallBox, type PickupKind, type PickupSpot } from "./map";
 import { SEATS, VEH_MAX_SPEED, VEH_USE_R, seatPos, stepVehicle, vehicleBlocked, vehicleBox, type VehicleState } from "./vehicle";
 import { EYE_H, PLAYER_H, SPRINT_SPEED, blocked, lineOfSight, rayPlayer, rayWorld, setDynamicBoxes, stepBody, viewDir, type Body } from "./physics";
 import { BOX_GRAVITY, BOX_LIFE_S, GRENADE_FUSE_S, GRENADE_GRAVITY, GRENADE_R, WEAPONS, falloff, lobPitch, type WeaponId } from "./weapons";
@@ -19,24 +21,22 @@ export const TICK_HZ = 60;
 export const MAX_TEAM = 20;
 export const TEAM_NAMES = ["Pracownicy magazynu", "Technicy efectivo"] as const;
 export const TEAM_SHORT = ["Pracownicy", "Technicy"] as const;
-/** The technicians have this long; when it runs out the workers have held the hall. */
-export const MISSION_TIME_S = 7 * 60;
-/** The briefing (the loading screen with the mission's story). */
+/** A round: the technicians have this long to connect, unless the server is already starting. */
+export const ROUND_S = 180;
+/** Rounds needed to win the match; the sides swap after SWAP_AFTER rounds. */
+export const ROUNDS_WIN = 4;
+export const SWAP_AFTER = 3;
+/** The briefing (the loading screen with the mission), the freeze before each round, the pause after it. */
 export const BRIEF_S = 20;
+export const FREEZE_S = 6;
+export const ROUND_END_S = 6;
 export const END_S = 12;
-/**
- * Players come back in waves, so a team returns together instead of trickling in one by one: every WAVE_S seconds
- * for the workers and the technicians. The technicians' wave is shorter because they have the longer walk back.
- */
-export const WAVE_S = [14, 9] as const;
-export const MIN_OUT_S = 3;
-/** Mission "server": how long a technician has to hold on at the cabinet, and how fast a lost connection decays. */
-export const CONNECT_S = 12;
-export const CONNECT_DECAY_S = 50;
-export const CONNECT_R = 3;
-/** Mission "tags": cases of watch tags the technicians have to bring to the charging stations. */
-export const TAGS_NEED = 5;
-export const TAG_DROP_S = 30;
+/** Connecting takes PLANT_S of holding E, the start-up BOOT_S, disconnecting DEFUSE_S. Letting go starts over. */
+export const PLANT_S = 4;
+export const BOOT_S = 40;
+export const DEFUSE_S = 7;
+/** How close to point A or B one has to stand. */
+export const SITE_R = 3;
 export const SPAWN_PROTECT_S = 1.5;
 export const GEO_S = 10;
 export const MAX_REWIND_S = 0.3;
@@ -109,8 +109,10 @@ interface Player {
   veh: number; seat: number;
   /** Where the current fall started (the highest point since we last stood still vertically). */
   fallFrom: number;
-  /** Holding E at the server; carrying a case of watch tags. */
+  /** Holding E at a point; carrying the case of watch tags. */
   acting: boolean; carry: boolean;
+  /** The side this player joined in the lobby (their team for the whole match); `team` is their role this half. */
+  group: Team;
 }
 
 interface Forklift {
@@ -136,7 +138,7 @@ export interface SimOptions { seed?: number }
 
 export class Sim {
   time = 0;
-  phase: "lobby" | "brief" | "play" | "end" = "lobby";
+  phase: "lobby" | "brief" | "freeze" | "play" | "round" | "end" = "lobby";
   /** What the next shift will be: bots per team, the mission, the bots' level. Set in the lobby by the host. */
   config: Config = { bots: [5, 5], mission: "random", difficulty: "normal" };
   /** The hall configuration and the mission of this shift. */
@@ -157,12 +159,22 @@ export class Sim {
   /** Eliminations per team this shift (for the scoreboard; the mission decides who wins). */
   readonly score: [number, number] = [0, 0];
   private botName = 0;
-  // mission state
-  private progress = 0;
-  private connecting = false;
-  private lastConnectEv = -99;
-  private delivered = 0;
-  private drops: { x: number; z: number; until: number }[] = [];
+  // round state
+  round = 0;
+  /** Rounds won by each lobby team. */
+  readonly wins: [number, number] = [0, 0];
+  private swapped = false;
+  /** Progress of a connection being made (0…1) and of a disconnection; which point is starting up (-1 = none). */
+  private plant = 0;
+  private defuse = 0;
+  private armed = -1;
+  private bootEnd = 0;
+  /** The point the technicians' bots go for this round. */
+  private botSite = 0;
+  /** The case of watch tags when it lies on the floor. */
+  private caseAt: { x: number; z: number } | null = null;
+  private lastActEv = -99;
+  private spawnSeq: [number, number] = [0, 0];
 
   constructor(readonly opts: SimOptions = {}) {
     this.rand = mulberry32(opts.seed ?? 1234567);
@@ -179,7 +191,7 @@ export class Sim {
       w: "rifle", mag: { rifle: 0, pistol: 0, shotgun: 0, grenade: 0 }, res: { rifle: 0, pistol: 0, shotgun: 0, grenade: 0 }, owned: new Set(),
       fireReady: 0, lastFire: -99, reloadUntil: 0, k: 0, d: 0, spawn: 0, protectUntil: 0, geoUntil: 0, lastStateT: 0,
       hist: new Float64Array(HIST * 4), histN: 0,
-      veh: -1, seat: 0, fallFrom: 0, acting: false, carry: false,
+      veh: -1, seat: 0, fallFrom: 0, acting: false, carry: false, group: team,
       brain: bot ? {
         path: null, pi: 0, goalX: 0, goalZ: 0, repathAt: 0, target: 0, reactAt: 0, strafe: 1, strafeUntil: 0,
         errYaw: 0, errPitch: 0, errUntil: 0, nextThink: 0, seenX: 0, seenZ: 0, seenT: -99, lastX: 0, lastZ: 0, stuckCheck: 0,
@@ -231,7 +243,7 @@ export class Sim {
     this.players.delete(id);
     this.boxes = this.boxes.filter((b) => b.owner !== p);
     this.evs.push({ k: "leave", name: p.name });
-    if (p.carry) this.drops.push({ x: p.body.x, z: p.body.z, until: this.time + TAG_DROP_S });
+    if (p.carry) this.caseAt = { x: p.body.x, z: p.body.z };
     if (this.hostId === id) { this.hostId = 0; for (const q of this.players.values()) if (!q.bot) { this.hostId = q.id; break; } }
   }
 
@@ -240,7 +252,7 @@ export class Sim {
   private setTeam(p: Player, team: number) {
     if (this.phase !== "lobby" || (team !== 0 && team !== 1) || p.team === team) return;
     if (this.teamCount(team as Team, true) >= MAX_TEAM) return;
-    p.team = team as Team;
+    p.team = p.group = team as Team;
   }
 
   private setConfig(p: Player, c: Config) {
@@ -267,11 +279,12 @@ export class Sim {
       for (let i = 0; i < want; i++) this.newPlayer(BOT_NAMES[this.botName++ % BOT_NAMES.length], true, t);
     }
     this.score[0] = 0; this.score[1] = 0;
-    this.progress = 0; this.connecting = false; this.delivered = 0; this.drops = []; this.boxes.length = 0;
+    this.wins[0] = 0; this.wins[1] = 0; this.round = 0; this.swapped = false;
+    this.boxes.length = 0;
     this.forklifts = VEHICLE_SPAWNS.map((v, i) => ({ id: i, st: { x: v.x, z: v.z, yaw: v.yaw, speed: 0 }, riders: [null, null], rev: 0, lastDriveT: 0 }));
     this.dynBoxes = VEHICLE_SPAWNS.map(() => ({ kind: "forklift", x0: 0, x1: 0, y0: 0, y1: 0, z0: 0, z1: 0 }));
     this.pickups = PICKUPS.map((spot) => ({ spot, readyAt: 0 }));
-    for (const p of this.players.values()) { p.k = 0; p.d = 0; p.veh = -1; this.respawn(p); }
+    for (const p of this.players.values()) { p.k = 0; p.d = 0; p.veh = -1; p.team = p.group; this.respawn(p); }
     this.phase = "brief";
     this.phaseEnd = this.time + BRIEF_S;
     this.evs.push({ k: "start", layout: this.layout, mission: this.mission });
@@ -301,7 +314,7 @@ export class Sim {
   }
 
   private onState(p: Player, m: Extract<ClientMsg, { t: "state" }>) {
-    if (!p.alive || m.spawn !== p.spawn || this.phase !== "play") return;
+    if (!p.alive || m.spawn !== p.spawn || (this.phase !== "play" && this.phase !== "round")) return;
     if (![m.x, m.y, m.z, m.yaw, m.pitch].every(Number.isFinite)) return;
     p.yaw = m.yaw;
     p.pitch = Math.max(-1.5, Math.min(1.5, m.pitch));
@@ -528,72 +541,121 @@ export class Sim {
     }
     if (q.hp > 0) return;
     this.leaveForklift(q, false);
-    q.hp = 0; q.alive = false; q.d++; q.respawnAt = Math.ceil((this.time + MIN_OUT_S) / WAVE_S[q.team]) * WAVE_S[q.team]; q.killedBy = by.name; q.reloadUntil = 0; q.acting = false;
-    if (q.carry) { q.carry = false; this.drops.push({ x: q.body.x, z: q.body.z, until: this.time + TAG_DROP_S }); this.evs.push({ k: "obj", what: "tagdrop", id: q.id }); }
+    q.hp = 0; q.alive = false; q.d++; q.killedBy = by.name; q.reloadUntil = 0; q.acting = false;
+    if (q.carry) { q.carry = false; this.caseAt = { x: q.body.x, z: q.body.z }; this.evs.push({ k: "obj", what: "casedrop", id: q.id, site: 0 }); }
     if (by !== q) { by.k++; this.score[by.team]++; }
     this.evs.push({ k: "kill", by: by.id, on: q.id, w, head });
   }
 
-  private endMatch(winner: Team, reason: "server" | "tags" | "time") {
+  // ---------------------------------------------------------------- rounds
+
+  /** Everyone back on their side, the points reset, the case to one technician; then the freeze. */
+  private startRound() {
+    this.round++;
+    if (this.round === SWAP_AFTER + 1 && !this.swapped) {
+      // half time: the teams trade roles
+      this.swapped = true;
+      for (const p of this.players.values()) p.team = (1 - p.group) as Team;
+    }
+    this.plant = 0; this.defuse = 0; this.armed = -1; this.caseAt = null; this.boxes.length = 0;
+    this.botSite = this.rand() < 0.5 ? 0 : 1;
+    this.forklifts = VEHICLE_SPAWNS.map((v, i) => ({ id: i, st: { x: v.x, z: v.z, yaw: v.yaw, speed: 0 }, riders: [null, null], rev: (this.forklifts[i]?.rev ?? 0) + 1, lastDriveT: 0 }));
+    for (const pk of this.pickups) pk.readyAt = 0;
+    this.spawnSeq = [Math.floor(this.rand() * 10), Math.floor(this.rand() * 10)];
+    for (const p of this.players.values()) { p.veh = -1; this.respawn(p); }
+    if (this.mission === "tags") {
+      const techs = [...this.players.values()].filter((p) => p.team === 1);
+      const holder = techs[Math.floor(this.rand() * techs.length)];
+      if (holder) holder.carry = true;
+    }
+    this.phase = "freeze";
+    this.phaseEnd = this.time + FREEZE_S;
+    this.evs.push({ k: "round", n: this.round, swapped: this.swapped });
+  }
+
+  /** `role` wins the round; the match ends when a team has ROUNDS_WIN. */
+  private endRound(role: Team, reason: "plant" | "defuse" | "time" | "out") {
     if (this.phase !== "play") return;
+    const group = this.swapped ? 1 - role : role;
+    this.wins[group]++;
+    this.phase = "round";
+    this.phaseEnd = this.time + ROUND_END_S;
+    for (const p of this.players.values()) p.acting = false;
+    this.evs.push({ k: "roundEnd", winner: role, group, reason, wins: [this.wins[0], this.wins[1]] });
+  }
+
+  private endMatch() {
     this.phase = "end";
     this.phaseEnd = this.time + END_S;
     let mvp: Player | null = null;
     for (const p of this.players.values()) if (!mvp || p.k > mvp.k || (p.k === mvp.k && p.d < mvp.d)) mvp = p;
-    this.evs.push({ k: "end", winner, reason, mvp: mvp?.name ?? "" });
+    this.evs.push({ k: "end", group: this.wins[0] > this.wins[1] ? 0 : 1, wins: [this.wins[0], this.wins[1]], mvp: mvp?.name ?? "" });
   }
 
-  /** The mission, once a tick: the server connection, or the cases of watch tags on their way. */
-  private stepMission(dt: number) {
-    const l = layout();
-    if (this.mission === "server") {
-      let on = false;
+  /** The round, once a tick: connecting, the start-up, disconnecting, the case on the floor, who is still standing. */
+  private stepRound(dt: number) {
+    const pts = sites(this.mission);
+    // a team with nobody in it at all cannot be "out" (someone trying the hall alone)
+    let alive0 = 0, alive1 = 0, any0 = false, any1 = false;
+    for (const p of this.players.values()) {
+      if (p.team === 0) { any0 = true; if (p.alive) alive0++; } else { any1 = true; if (p.alive) alive1++; }
+    }
+    const at = (p: Player, i: number) => p.alive && p.veh < 0 && p.body.y < 1.5 && Math.hypot(p.body.x - pts[i].x, p.body.z - pts[i].z) <= SITE_R;
+
+    if (this.mission === "tags" && this.caseAt) {
+      // the case on the floor: the first technician to step on it carries it on
       for (const p of this.players.values()) {
-        if (p.team === 1 && p.alive && p.acting && p.veh < 0 && Math.hypot(p.body.x - l.server.x, p.body.z - l.server.z) <= CONNECT_R) { on = true; break; }
-      }
-      if (on && !this.connecting && this.time - this.lastConnectEv > 8) { this.lastConnectEv = this.time; this.evs.push({ k: "obj", what: "connect", id: 0 }); }
-      this.connecting = on;
-      this.progress = on ? this.progress + dt / CONNECT_S : Math.max(0, this.progress - dt / CONNECT_DECAY_S);
-      if (this.progress >= 1) { this.progress = 1; this.endMatch(1, "server"); }
-    } else {
-      for (let i = this.drops.length - 1; i >= 0; i--) if (this.time >= this.drops[i].until) this.drops.splice(i, 1);
-      for (const p of this.players.values()) {
-        if (!p.alive || p.veh >= 0 && p.seat === 0 && false) continue;
-        const b = p.body;
-        // a dropped case: a technician picks it back up, a worker confiscates it
-        for (let i = this.drops.length - 1; i >= 0; i--) {
-          const d = this.drops[i];
-          if (Math.hypot(b.x - d.x, b.z - d.z) > 1.6 || b.y > 1.5) continue;
-          if (p.team === 1 && !p.carry) { p.carry = true; this.drops.splice(i, 1); this.evs.push({ k: "obj", what: "tagpick", id: p.id }); }
-          else if (p.team === 0) { this.drops.splice(i, 1); this.evs.push({ k: "obj", what: "tagseized", id: p.id }); }
-        }
-        if (p.team !== 1) continue;
-        if (!p.carry) {
-          for (const s of l.supply) if (Math.hypot(b.x - s.x, b.z - s.z) <= 2.6) { p.carry = true; this.evs.push({ k: "obj", what: "tagpick", id: p.id }); break; }
-        } else {
-          for (const s of l.stations) {
-            if (Math.hypot(b.x - s.x, b.z - s.z) > 2.6) continue;
-            p.carry = false; this.delivered++;
-            this.evs.push({ k: "obj", what: "tagdeliver", id: p.id });
-            if (this.delivered >= TAGS_NEED) this.endMatch(1, "tags");
-            break;
-          }
-        }
+        if (p.team !== 1 || !p.alive || p.body.y > 1.5 || Math.hypot(p.body.x - this.caseAt.x, p.body.z - this.caseAt.z) > 1.6) continue;
+        p.carry = true; this.caseAt = null; this.evs.push({ k: "obj", what: "casepick", id: p.id, site: 0 });
+        break;
       }
     }
+
+    if (this.armed < 0) {
+      // connecting: a technician holding E at A or B (with the case, when the mission is the tags)
+      let who: Player | null = null, site = 0;
+      for (const p of this.players.values()) {
+        if (p.team !== 1 || !p.acting || (this.mission === "tags" && !p.carry)) continue;
+        for (let i = 0; i < pts.length; i++) if (at(p, i)) { who = p; site = i; }
+        if (who) break;
+      }
+      if (who) {
+        if (this.plant === 0 && this.time - this.lastActEv > 5) { this.lastActEv = this.time; this.evs.push({ k: "obj", what: "plant", id: who.id, site }); }
+        this.plant += dt / PLANT_S;
+        if (this.plant >= 1) {
+          this.armed = site; this.bootEnd = this.time + BOOT_S; this.plant = 0; who.carry = false; this.lastActEv = -99;
+          this.evs.push({ k: "obj", what: "armed", id: who.id, site });
+        }
+      } else this.plant = 0;
+      if (this.armed < 0) {
+        if (alive1 === 0 && any1) return this.endRound(0, "out");
+        if (this.time >= this.phaseEnd) return this.endRound(0, "time");
+      }
+    } else {
+      // starting up: a worker holding E at that point disconnects it
+      let who: Player | null = null;
+      for (const p of this.players.values()) if (p.team === 0 && p.acting && at(p, this.armed)) { who = p; break; }
+      if (who) {
+        if (this.defuse === 0 && this.time - this.lastActEv > 5) { this.lastActEv = this.time; this.evs.push({ k: "obj", what: "defuse", id: who.id, site: this.armed }); }
+        this.defuse += dt / DEFUSE_S;
+        if (this.defuse >= 1) { this.evs.push({ k: "obj", what: "defused", id: who.id, site: this.armed }); return this.endRound(0, "defuse"); }
+      } else this.defuse = 0;
+      if (this.time >= this.bootEnd) return this.endRound(1, "plant");
+    }
+    if (alive0 === 0 && any0) this.endRound(1, "out");
   }
 
   private respawn(p: Player) {
-    // Grupa A holds the west of the hall, Grupa B the east: prefer a spawn on our own side, far from live enemies,
-    // picked among the best three so it is not predictable
-    const scored = SPAWNS.map(([x, z]) => {
-      let near = 400;
-      for (const q of this.players.values()) if (q !== p && q.alive && q.team !== p.team) near = Math.min(near, Math.hypot(q.body.x - x, q.body.z - z));
-      // the hall is long: come back on our side, not on top of an enemy but not a minute's walk from the fight either
-      const home = (p.team === 0 ? -x : x) > 0 ? 1000 : 0;
-      return { x, z, near: home - Math.abs(near - 55) - (near < 25 ? 300 : 0) };
-    }).sort((a, b) => b.near - a.near);
-    const s = scored[Math.floor(this.rand() * Math.min(3, scored.length))];
+    // the workers start in the west of the hall, the technicians at the docks in the east; each takes the next free
+    // spawn of their side
+    const mine = SPAWNS.filter(([x]) => (p.team === 0 ? x < 0 : x > 0));
+    const [sx, sz] = mine[this.spawnSeq[p.team]++ % mine.length];
+    // more players than spawn points: later ones stand a step aside
+    const lap = Math.floor((this.spawnSeq[p.team] - 1) / mine.length) % 4;
+    let s = { x: sx, z: sz };
+    for (const [ox, oz] of [[0, 0], [1.2, 0], [0, 1.2], [-1.2, 0], [0, -1.2]].slice(lap)) {
+      if (!blocked(sx + ox, 0.01, sz + oz, false)) { s = { x: sx + ox, z: sz + oz }; break; }
+    }
     p.body.x = s.x; p.body.y = 0; p.body.z = s.z; p.body.vx = p.body.vy = p.body.vz = 0; p.body.onGround = true;
     p.yaw = Math.atan2(s.x, s.z); // face the middle of the hall
     p.pitch = 0;
@@ -610,9 +672,9 @@ export class Sim {
     p.acting = false; p.carry = false;
     if (p.brain) {
       p.brain.path = null; p.brain.target = 0; p.brain.seenT = -99; p.brain.repathAt = 0;
-      // most technicians work the mission; most workers guard it, the rest go looking for trouble
-      p.brain.job = this.rand() < (p.team === 1 ? 0.75 : 0.6) ? "mission" : "hunt";
-      p.brain.station = Math.floor(this.rand() * 3);
+      // most technicians go for the point; most workers guard A or B, the rest go looking for trouble
+      p.brain.job = this.rand() < (p.team === 1 ? 0.8 : 0.7) ? "mission" : "hunt";
+      p.brain.station = Math.floor(this.rand() * 2);
       p.brain.lane = Math.floor(this.rand() * 3) - 1; p.brain.laneDone = false;
     }
   }
@@ -623,36 +685,43 @@ export class Sim {
     this.time += dt;
     useLayout(this.layout);
     if (this.phase === "lobby") return;
-    if (this.phase === "brief") {
-      if (this.time >= this.phaseEnd) { this.phase = "play"; this.phaseEnd = this.time + MISSION_TIME_S; for (const p of this.players.values()) { p.protectUntil = this.time + SPAWN_PROTECT_S; p.lastStateT = this.time; } }
+    if (this.phase === "brief") { if (this.time >= this.phaseEnd) this.startRound(); return; }
+    if (this.phase === "freeze") {
+      if (this.time >= this.phaseEnd) {
+        this.phase = "play"; this.phaseEnd = this.time + ROUND_S;
+        for (const p of this.players.values()) { p.protectUntil = this.time + SPAWN_PROTECT_S; p.lastStateT = this.time; }
+      }
       return;
     }
     if (this.phase === "end") {
       if (this.time >= this.phaseEnd) {
-        // back to the lobby: the bots go home, the people stay in their teams
-        for (const p of [...this.players.values()]) if (p.bot) this.players.delete(p.id);
+        // back to the lobby: the bots go home, the people stay in the teams they chose
+        for (const p of [...this.players.values()]) { if (p.bot) this.players.delete(p.id); else p.team = p.group; }
         this.phase = "lobby";
         this.evs.push({ k: "lobby" });
       }
       return;
     }
+    if (this.phase === "round" && this.time >= this.phaseEnd) {
+      if (Math.max(this.wins[0], this.wins[1]) >= ROUNDS_WIN) this.endMatch(); else this.startRound();
+      return;
+    }
     this.stepForklifts(dt);
-    if (this.time >= this.phaseEnd) this.endMatch(0, "time");
 
     for (const p of this.players.values()) {
-      if (!p.alive) { if (this.time >= p.respawnAt) this.respawn(p); continue; }
+      if (!p.alive) continue; // out until the next round
       if (p.reloadUntil && this.time >= p.reloadUntil) {
         const w = WEAPONS[p.w], need = w.mag - p.mag[p.w], take = Math.min(need, p.res[p.w]);
         p.mag[p.w] += take; if (p.res[p.w] < 900) p.res[p.w] -= take; p.reloadUntil = 0;
       }
-      if (p.brain) this.botTick(p, dt);
+      if (p.brain && this.phase === "play") this.botTick(p, dt);
       this.touchPickups(p);
       const idx = (p.histN % HIST) * 4;
       p.hist[idx] = this.time; p.hist[idx + 1] = p.body.x; p.hist[idx + 2] = p.body.y; p.hist[idx + 3] = p.body.z;
       p.histN++;
     }
     this.stepBoxes(dt);
-    this.stepMission(dt);
+    if (this.phase === "play") this.stepRound(dt);
   }
 
   private touchPickups(p: Player) {
@@ -748,8 +817,11 @@ export class Sim {
     }
 
     let mx = 0, mz = 0, sprint = false;
-    const srv = layout().server;
-    p.acting = this.mission === "server" && p.team === 1 && br.job === "mission" && Math.hypot(b.x - srv.x, b.z - srv.z) <= CONNECT_R - 0.3;
+    // at a point: a technician connects (with the case, when the mission is the tags), a worker disconnects
+    const pts = sites(this.mission);
+    const near = (i: number) => Math.hypot(b.x - pts[i].x, b.z - pts[i].z) <= SITE_R - 0.3;
+    p.acting = p.team === 1 ? this.armed < 0 && (this.mission === "server" || p.carry) && (near(0) || near(1))
+      : this.armed >= 0 && near(this.armed);
     const tgt = br.target ? this.players.get(br.target) : undefined;
     if (tgt && tgt.alive) {
       const dx = tgt.body.x - ex, dz = tgt.body.z - ez, d = Math.hypot(dx, dz);
@@ -831,38 +903,39 @@ export class Sim {
    * Technicians: the server, or the delivery point and then a charging station. Workers: a post near the objective.
    */
   private missionGoal(p: Player, out: number[]): boolean {
-    const l = layout(), br = p.brain!, b = p.body;
+    const pts = sites(this.mission), br = p.brain!, b = p.body;
+    /** A post within ~14 m of a point: kept until reached, then now and then changed. */
+    const post = (ox: number, oz: number) => {
+      const has = Math.hypot(br.goalX - ox, br.goalZ - oz) < 16;
+      if (has && (Math.hypot(b.x - br.goalX, b.z - br.goalZ) > 1.5 || this.rand() > 0.02)) { out[0] = br.goalX; out[1] = br.goalZ; return true; }
+      for (let tries = 0; tries < 12; tries++) {
+        const x = ox + (this.rand() - 0.5) * 26, z = oz + (this.rand() - 0.5) * 26;
+        if (freeAt(x, z)) { out[0] = x; out[1] = z; return true; }
+      }
+      out[0] = ox; out[1] = oz; return true;
+    };
+    if (this.armed >= 0) {
+      // it is starting up: the workers run to disconnect it, the technicians hold the point
+      const s = pts[this.armed];
+      if (p.team === 0) { out[0] = s.x; out[1] = s.z; return !p.acting; }
+      return post(s.x, s.z);
+    }
     if (p.team === 1) {
-      // on the way west, first through the middle by this life's route, so the push does not always come the same way
-      const loaded = this.mission === "server" || p.carry;
-      if (loaded && !br.laneDone) {
+      // the case lies on the floor: whoever is near picks it up
+      if (this.mission === "tags" && this.caseAt && Math.hypot(this.caseAt.x - b.x, this.caseAt.z - b.z) < 70) { out[0] = this.caseAt.x; out[1] = this.caseAt.z; return true; }
+      // through the middle by this life's route, so the push does not always come the same way
+      if (!br.laneDone) {
         if (b.x < 12) br.laneDone = true;
         else { out[0] = 8; out[1] = br.lane * 30 + (br.lane === 0 ? 2 : 0); if (freeAt(out[0], out[1])) return true; br.laneDone = true; }
       }
-      if (this.mission === "server") { out[0] = l.server.x; out[1] = l.server.z; return !p.acting; }
-      if (!p.carry) {
-        // a dropped case nearby is quicker than the walk back to the docks
-        let best = null as { x: number; z: number } | null, bd = 60;
-        for (const d of this.drops) { const dist = Math.hypot(d.x - b.x, d.z - b.z); if (dist < bd) { bd = dist; best = d; } }
-        if (!best) { bd = Infinity; for (const sp of l.supply) { const dist = Math.hypot(sp.x - b.x, sp.z - b.z); if (dist < bd) { bd = dist; best = sp; } } }
-        out[0] = best!.x; out[1] = best!.z; return true;
-      }
-      const st = l.stations[br.station % l.stations.length];
-      out[0] = st.x; out[1] = st.z; return true;
+      const s = pts[this.botSite];
+      // with the tags only the carrier goes to the point itself; the others cover it
+      if (this.mission === "tags" && !p.carry) return post(s.x, s.z);
+      out[0] = s.x; out[1] = s.z; return !p.acting;
     }
-    // workers: keep a post within ~16 m of what they defend; pick a new post once the old one is reached
-    let ox: number, oz: number;
-    if (this.mission === "server") { ox = l.server.x; oz = l.server.z; }
-    else if (this.drops.length) { ox = this.drops[0].x; oz = this.drops[0].z; out[0] = ox; out[1] = oz; return true; }
-    else { const st = l.stations[br.station % l.stations.length]; ox = st.x; oz = st.z; }
-    const atPost = Math.hypot(br.goalX - ox, br.goalZ - oz) < 18;
-    if (atPost && Math.hypot(b.x - br.goalX, b.z - br.goalZ) > 1.5) { out[0] = br.goalX; out[1] = br.goalZ; return true; }
-    if (atPost && this.rand() > 0.02) { out[0] = br.goalX; out[1] = br.goalZ; return true; }
-    for (let tries = 0; tries < 12; tries++) {
-      const x = ox + (this.rand() - 0.5) * 30, z = oz + (this.rand() - 0.5) * 30;
-      if (freeAt(x, z)) { out[0] = x; out[1] = z; return true; }
-    }
-    out[0] = ox; out[1] = oz; return true;
+    // workers: split between A and B
+    const s = pts[br.station % pts.length];
+    return post(s.x, s.z);
   }
 
   private nearestPickup(p: Player, kind: PickupKind) {
@@ -888,7 +961,7 @@ export class Sim {
       const list: PlayerSnap[] = [];
       for (const p of this.players.values()) {
         list.push({
-          id: p.id, n: p.name, bot: p.bot, c: p.color, tm: p.team, veh: p.veh, seat: p.seat, carry: p.carry,
+          id: p.id, n: p.name, bot: p.bot, c: p.color, tm: p.team, g: p.group, veh: p.veh, seat: p.seat, carry: p.carry,
           x: +p.body.x.toFixed(3), y: +p.body.y.toFixed(3), z: +p.body.z.toFixed(3), yaw: +p.yaw.toFixed(3), pitch: +p.pitch.toFixed(3),
           hp: p.hp, alive: p.alive, w: p.w, k: p.k, d: p.d, fired: +Math.min(99, this.time - p.lastFire).toFixed(2),
         });
@@ -896,14 +969,18 @@ export class Sim {
       this.snapCache = { t: this.time, list };
     }
     const self: SelfSnap = {
-      hp: me.hp, alive: me.alive, w: me.w, team: me.team, mag: { ...me.mag }, res: { ...me.res }, owned: [...me.owned],
+      hp: me.hp, alive: me.alive, w: me.w, team: me.team, group: me.group, mag: { ...me.mag }, res: { ...me.res }, owned: [...me.owned],
       spawn: me.spawn, x: me.body.x, y: me.body.y, z: me.body.z, yaw: me.yaw,
       veh: me.veh, seat: me.seat, vrev: me.veh >= 0 ? this.forklifts[me.veh].rev : 0,
-      reloading: !!me.reloadUntil, respawnIn: me.alive ? 0 : Math.max(0, me.respawnAt - this.time),
+      reloading: !!me.reloadUntil,
       geo: Math.max(0, me.geoUntil - this.time), killedBy: me.killedBy, carry: me.carry,
     };
-    const obj: ObjSnap = this.mission === "server" ? { p: +this.progress.toFixed(3), on: this.connecting }
-      : { n: this.delivered, need: TAGS_NEED, drops: this.drops.map((d) => [+d.x.toFixed(1), +d.z.toFixed(1)]) };
+    const obj: ObjSnap = {
+      round: this.round, wins: [this.wins[0], this.wins[1]], swapped: this.swapped,
+      plant: +this.plant.toFixed(3), defuse: +this.defuse.toFixed(3), armed: this.armed,
+      boot: this.armed >= 0 ? +Math.max(0, this.bootEnd - this.time).toFixed(2) : 0,
+      case: this.caseAt ? [+this.caseAt.x.toFixed(1), +this.caseAt.z.toFixed(1)] : null,
+    };
     return {
       t: "snap", time: +this.time.toFixed(3), phase: this.phase,
       left: this.phase === "lobby" ? 0 : Math.max(0, this.phaseEnd - this.time),

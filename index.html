@@ -30,6 +30,8 @@
     <div id="marker" hidden><i></i><span id="markerText"></span></div>
     <div id="cross"><i></i><i></i><i></i><i></i><span class="dot"></span></div>
     <div id="hitmark"><svg viewBox="0 0 26 26" width="26" height="26" fill="none" stroke="#f5f5f7" stroke-width="2" stroke-linecap="round"><path d="M3 3l6 6M23 3l-6 6M3 23l6-6M23 23l-6-6" /></svg></div>
+    <div id="actBar" hidden><i></i><span id="actText"></span></div>
+    <div id="banner" hidden><b id="bannerTitle"></b><span id="bannerSub"></span></div>
     <div id="usePrompt" hidden><kbd>E</kbd><span id="usePromptText"></span></div>
     <div id="chat"></div>
     <input id="chatbox" class="field" maxlength="120" placeholder="Wiadomość do hali…" hidden />
@@ -46,7 +48,7 @@
     </div>
   </div>
 
-  <div id="death" hidden><div class="card"><p class="eyebrow"><span class="badge badge-gray">Wyeliminowany</span></p><h2 id="deathBy"></h2><p id="deathSub">Wracasz na halę z następną falą.</p><div class="count"><span class="badge badge-blue" id="deathCount">Powrót za 3 s</span></div></div></div>
+  <div id="death" hidden><b id="deathBy"></b><span id="deathSub"></span><span id="deathCount"></span></div>
 
   <div id="board" class="overlay" hidden><div class="card"><h3><span>Tablica zmiany</span><span id="boardRoom" class="badge badge-gray"></span></h3><table class="board" id="boardTable"></table></div></div>
 
@@ -73,7 +75,7 @@
     <div class="page">
       <div class="page-header">
         <h1>Pracownicy magazynu kontra technicy efectivo</h1>
-        <p>Technicy mają misję do wykonania, pracownicy bronią hali. Wybierz stronę, ustaw składy i zacznij zmianę.</p>
+        <p>Rundy jak w CS: technicy podłączają serwer albo montują tagi w punkcie A lub B, pracownicy mają 40 sekund, żeby to odłączyć. Bez powrotów w trakcie rundy, mecz do 4 wygranych rund.</p>
       </div>
       <div class="card">
         <div class="card-body setup-row">
@@ -88,7 +90,7 @@
           <div class="card team-card" data-team="0">
             <div class="card-head"><h2><span class="swatch" style="background:var(--team-w)"></span>Pracownicy magazynu</h2><span class="badge badge-orange">Obrona</span></div>
             <div class="card-body">
-              <p class="team-desc">Odłączyli system i nie chcą go z powrotem. Bronią serwera i stacji ładowania.</p>
+              <p class="team-desc">Bronią punktów A i B. Jeśli technicy coś podłączą, muszą to odłączyć przed końcem odliczania.</p>
               <div class="slots-list" id="slots0"></div>
               <div class="team-foot"><button class="btn btn-ghost join" data-join="0">Dołącz do pracowników</button><div class="stepper" data-bots="0"><span>Boty</span><button data-d="-1" aria-label="Mniej botów">−</button><b id="bots0">5</b><button data-d="1" aria-label="Więcej botów">+</button></div></div>
             </div>
@@ -96,7 +98,7 @@
           <div class="card team-card" data-team="1">
             <div class="card-head"><h2><span class="swatch" style="background:var(--team-t)"></span>Technicy efectivo</h2><span class="badge badge-blue">Atak</span></div>
             <div class="card-body">
-              <p class="team-desc">Przyjeżdżają od ramp. Mają podłączyć serwer lokalny albo dostarczyć tagi zegarkowe.</p>
+              <p class="team-desc">Przyjeżdżają od ramp. Podłączają serwer albo montują tagi w punkcie A lub B i bronią go do uruchomienia.</p>
               <div class="slots-list" id="slots1"></div>
               <div class="team-foot"><button class="btn btn-ghost join" data-join="1">Dołącz do techników</button><div class="stepper" data-bots="1"><span>Boty</span><button data-d="-1" aria-label="Mniej botów">−</button><b id="bots1">5</b><button data-d="1" aria-label="Więcej botów">+</button></div></div>
             </div>
@@ -106,7 +108,7 @@
           <div class="card-body setup-row">
             <div class="row" id="missionRow"><span class="label">Misja</span><button class="chip" data-mission="random" aria-pressed="true">Losowa</button><button class="chip" data-mission="server" aria-pressed="false">Serwer lokalny</button><button class="chip" data-mission="tags" aria-pressed="false">Tagi zegarkowe</button></div>
             <div class="row" id="diffRow"><span class="label">Poziom botów</span><button class="chip" data-diff="easy" aria-pressed="false">Łatwy</button><button class="chip" data-diff="normal" aria-pressed="true">Normalny</button><button class="chip" data-diff="hard" aria-pressed="false">Trudny</button></div>
-            <div class="row cta"><button class="btn btn-primary btn-lg" id="play">Zacznij zmianę</button><span class="hint" id="hostHint"></span></div>
+            <div class="row cta"><button class="btn btn-primary btn-lg" id="play">Zacznij mecz</button><span class="hint" id="hostHint"></span></div>
           </div>
         </div>
         <div class="card">
@@ -135,7 +137,7 @@
           <div><kbd>Spacja</kbd>Skok na niskie palety</div>
           <div><kbd>R</kbd>Przeładowanie</div>
           <div><kbd>1 2 3 4</kbd>Wyrzutnie i granat</div>
-          <div><kbd>E</kbd>Wózek widłowy, a przy serwerze przytrzymaj: podłączanie</div>
+          <div><kbd>E</kbd>Wózek widłowy. Przy punkcie A lub B przytrzymaj: podłączanie albo odłączanie</div>
           <div><kbd>Tab</kbd>Tablica wyników</div>
           <div><kbd>T</kbd>Czat</div>
         </div>
