@@ -31,7 +31,13 @@
     "bench:splat-viewport": "tsx tools/performance/splat-viewport.mts",
     "bench:host": "tsx tools/performance/host.mts",
     "bench:server": "node tools/performance/server-bench.mjs",
-    "bench:verify": "tsx tools/performance/wire-parity.mts && tsx tools/performance/matrix-parity.mts && tsx tools/performance/geometry-parity.mts && tsx tools/performance/static-http.mts && tsx tools/performance/splat-viewport.mts"
+    "bench:verify": "tsx tools/performance/wire-parity.mts && tsx tools/performance/matrix-parity.mts && tsx tools/performance/geometry-parity.mts && tsx tools/performance/static-http.mts && tsx tools/performance/splat-viewport.mts",
+    "efectivo": "vite --config efectivo/vite.config.ts --host",
+    "efectivo:server": "tsx efectivo/server.ts",
+    "efectivo:build": "vite build --config efectivo/vite.config.ts",
+    "efectivo:start": "EF_SERVE=1 tsx efectivo/server.ts",
+    "efectivo:smoke": "tsx efectivo/smoke.ts",
+    "efectivo:typecheck": "tsc --noEmit -p efectivo"
   },
   "dependencies": {
     "@fails-components/webtransport": "1.6.11",
