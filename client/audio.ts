@@ -1,5 +1,5 @@
 // Every sound in efectivo ARENA is synthesised with WebAudio at run time (filtered noise and oscillators), so the game
-// ships no audio files. Positional sounds fall off with distance from the listener.
+// ships no audio files. The launchers beep like barcode scanners; there are no gunshots. Positional sounds fall off with distance from the listener.
 
 import type { WeaponId } from "../shared/weapons";
 
@@ -40,22 +40,33 @@ function tone(t: number, f0: number, f1: number, dur: number, gain: number, type
   o.start(t); o.stop(t + dur + 0.02);
 }
 
-const SHOT = {
-  rifle: { f: 1400, q: 0.8, g: 0.9, d: 0.16, body: 120 },
-  pistol: { f: 1900, q: 1.0, g: 0.75, d: 0.12, body: 160 },
-  shotgun: { f: 800, q: 0.6, g: 1.2, d: 0.32, body: 70 },
+// Each launcher "fires" with a barcode-scanner beep: a clean square-ish tone with a fast attack, plus a soft cardboard
+// thump from the launch. The rifle beeps high and short, the pistol a touch longer, the Paletówka a double beep.
+const BEEP = {
+  rifle: { f: 2750, d: 0.055, n: 1 },
+  pistol: { f: 3150, d: 0.08, n: 1 },
+  shotgun: { f: 2250, d: 0.06, n: 2 },
 } as const;
 
-/** A gunshot; `dist` in metres from the listener (0 = our own gun). */
+function beep(t: number, f: number, dur: number, gain: number, muffled: boolean) {
+  if (!ctx || !master) return;
+  const o = ctx.createOscillator(); o.type = "square"; o.frequency.value = f;
+  const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = muffled ? 1800 : 6000;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + 0.004);
+  g.gain.setValueAtTime(gain, t + dur - 0.01); g.gain.linearRampToValueAtTime(0, t + dur);
+  o.connect(lp).connect(g).connect(master);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+
+/** A launch: scanner beep plus a cardboard thump; `dist` in metres from the listener (0 = our own launcher). */
 export function shot(w: WeaponId, dist = 0) {
   if (!ctx) return;
-  const s = SHOT[w];
-  const att = 1 / (1 + dist * 0.09);
+  const b = BEEP[w];
+  const att = 1 / (1 + dist * 0.08);
   const t = ctx.currentTime;
-  const far = dist > 25;
-  noise(t, s.d, far ? s.f * 0.5 : s.f, s.q, s.g * att, "bandpass", s.d);
-  noise(t, s.d * 2.5, 400, 0.7, s.g * 0.35 * att, "lowpass", s.d * 2.5); // the hall's tail
-  tone(t, s.body * 2, s.body * 0.5, 0.09, 0.5 * att, "triangle");
+  for (let i = 0; i < b.n; i++) beep(t + i * (b.d + 0.035), b.f, b.d, 0.16 * att, dist > 25);
+  noise(t, 0.07, 260, 0.9, 0.35 * att, "lowpass", 0.07);
 }
 
 export function hitMarker(head: boolean) {

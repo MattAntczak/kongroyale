@@ -1,93 +1,129 @@
-// Short-lived effects: bullet tracers, impact sparks and the muzzle flash light. Everything is pooled up front so a
-// firefight allocates nothing per shot.
+// Short-lived effects: the cardboard boxes in flight, the scraps of cardboard where one lands, and the scanner flash
+// at the launcher. Everything is pooled up front so a firefight allocates nothing per shot.
+//
+// The boxes here are only what the player sees: the host flies the real ones (shared/sim.ts). Both use the same
+// speed and gravity, so a box drawn here lands where the host's box lands.
 
 import * as THREE from "three";
+import { BOX_GRAVITY, BOX_LIFE_S, WEAPONS, type WeaponId } from "../shared/weapons";
+import { cardboardTexture } from "./world";
 
-const MAX_TRACERS = 96;
-const MAX_SPARKS = 600;
+const MAX_BOXES = 320;
+const MAX_BITS = 700;
+
+/** First thing a box meets along a step: distance (≤ seg) and whether it was a player. */
+export type BoxHitTest = (x: number, y: number, z: number, dx: number, dy: number, dz: number, seg: number, team: number, owner: number) => { t: number; player: boolean };
 
 export class Fx {
-  private tracerGeo = new THREE.BufferGeometry();
-  private tracerPos = new Float32Array(MAX_TRACERS * 6);
-  private tracerCol = new Float32Array(MAX_TRACERS * 6);
-  private tracerLife = new Float32Array(MAX_TRACERS);
-  private tracerNext = 0;
-  private sparkGeo = new THREE.BufferGeometry();
-  private sparkPos = new Float32Array(MAX_SPARKS * 3);
-  private sparkVel = new Float32Array(MAX_SPARKS * 3);
-  private sparkCol = new Float32Array(MAX_SPARKS * 3);
-  private sparkLife = new Float32Array(MAX_SPARKS);
-  private sparkNext = 0;
+  private boxMesh: THREE.InstancedMesh;
+  private bx = new Float32Array(MAX_BOXES * 3);
+  private bv = new Float32Array(MAX_BOXES * 3);
+  private brot = new Float32Array(MAX_BOXES * 3);
+  private bspin = new Float32Array(MAX_BOXES * 3);
+  private bsize = new Float32Array(MAX_BOXES);
+  private bage = new Float32Array(MAX_BOXES).fill(-1);
+  private bteam = new Int8Array(MAX_BOXES);
+  private bowner = new Int32Array(MAX_BOXES);
+  private bnext = 0;
+  private bitGeo = new THREE.BufferGeometry();
+  private bitPos = new Float32Array(MAX_BITS * 3);
+  private bitVel = new Float32Array(MAX_BITS * 3);
+  private bitCol = new Float32Array(MAX_BITS * 3);
+  private bitLife = new Float32Array(MAX_BITS);
+  private bitNext = 0;
   private flash: THREE.PointLight;
   private flashLife = 0;
+  private m = new THREE.Matrix4();
+  private q = new THREE.Quaternion();
+  private e = new THREE.Euler();
+  private p = new THREE.Vector3();
+  private s = new THREE.Vector3();
 
-  constructor(scene: THREE.Scene) {
-    this.tracerGeo.setAttribute("position", new THREE.BufferAttribute(this.tracerPos, 3));
-    this.tracerGeo.setAttribute("color", new THREE.BufferAttribute(this.tracerCol, 3));
-    const lines = new THREE.LineSegments(this.tracerGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-    lines.frustumCulled = false;
-    scene.add(lines);
-    this.sparkGeo.setAttribute("position", new THREE.BufferAttribute(this.sparkPos, 3));
-    this.sparkGeo.setAttribute("color", new THREE.BufferAttribute(this.sparkCol, 3));
-    const pts = new THREE.Points(this.sparkGeo, new THREE.PointsMaterial({ size: 0.06, vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  constructor(scene: THREE.Scene, private hitTest: BoxHitTest) {
+    this.boxMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ map: cardboardTexture("#b58e5c", true), roughness: 0.85 }), MAX_BOXES);
+    this.boxMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.boxMesh.frustumCulled = false;
+    this.boxMesh.castShadow = true;
+    for (let i = 0; i < MAX_BOXES; i++) this.hide(i);
+    scene.add(this.boxMesh);
+    this.bitGeo.setAttribute("position", new THREE.BufferAttribute(this.bitPos, 3));
+    this.bitGeo.setAttribute("color", new THREE.BufferAttribute(this.bitCol, 3));
+    const pts = new THREE.Points(this.bitGeo, new THREE.PointsMaterial({ size: 0.07, vertexColors: true }));
     pts.frustumCulled = false;
+    this.bitPos.fill(-100);
     scene.add(pts);
-    this.flash = new THREE.PointLight(0xffc27a, 0, 9, 2);
+    // the launcher's scan: a short blue-white light, like a barcode scanner's flash
+    this.flash = new THREE.PointLight(0x9aa0ff, 0, 8, 2);
     scene.add(this.flash);
   }
 
-  tracer(ax: number, ay: number, az: number, bx: number, by: number, bz: number, mine: boolean) {
-    const i = this.tracerNext; this.tracerNext = (i + 1) % MAX_TRACERS;
-    // start a little ahead of the muzzle so our own tracer does not fill the screen
-    const dx = bx - ax, dy = by - ay, dz = bz - az, d = Math.hypot(dx, dy, dz) || 1;
-    const s = Math.min(mine ? 1.2 : 0.4, d * 0.5);
-    this.tracerPos.set([ax + dx / d * s, ay + dy / d * s, az + dz / d * s, bx, by, bz], i * 6);
-    this.tracerLife[i] = 0.07;
-    this.paintTracer(i, 1);
+  private hide(i: number) {
+    this.m.makeScale(0, 0, 0);
+    this.boxMesh.setMatrixAt(i, this.m);
   }
 
-  private paintTracer(i: number, a: number) {
-    const c = this.tracerCol;
-    c[i * 6] = 1 * a; c[i * 6 + 1] = 0.85 * a; c[i * 6 + 2] = 0.55 * a;
-    c[i * 6 + 3] = 1 * a * 0.4; c[i * 6 + 4] = 0.8 * a * 0.4; c[i * 6 + 5] = 0.5 * a * 0.4;
+  /** Launch one visual box from (x, y, z) along a unit direction. */
+  launch(x: number, y: number, z: number, dx: number, dy: number, dz: number, w: WeaponId, team: number, owner: number) {
+    const i = this.bnext; this.bnext = (i + 1) % MAX_BOXES;
+    const def = WEAPONS[w];
+    this.bx[i * 3] = x; this.bx[i * 3 + 1] = y; this.bx[i * 3 + 2] = z;
+    this.bv[i * 3] = dx * def.speed; this.bv[i * 3 + 1] = dy * def.speed; this.bv[i * 3 + 2] = dz * def.speed;
+    for (let k = 0; k < 3; k++) { this.brot[i * 3 + k] = Math.random() * 6.28; this.bspin[i * 3 + k] = (Math.random() - 0.5) * 18; }
+    this.bsize[i] = def.size; this.bage[i] = 0; this.bteam[i] = team; this.bowner[i] = owner;
   }
 
-  sparks(x: number, y: number, z: number, n: number, warm: boolean) {
+  /** A burst of cardboard scraps (and a little packing paper). */
+  bits(x: number, y: number, z: number, n: number) {
     for (let k = 0; k < n; k++) {
-      const i = this.sparkNext; this.sparkNext = (i + 1) % MAX_SPARKS;
-      this.sparkPos[i * 3] = x; this.sparkPos[i * 3 + 1] = y; this.sparkPos[i * 3 + 2] = z;
-      this.sparkVel[i * 3] = (Math.random() - 0.5) * 4; this.sparkVel[i * 3 + 1] = Math.random() * 3; this.sparkVel[i * 3 + 2] = (Math.random() - 0.5) * 4;
-      this.sparkLife[i] = 0.25 + Math.random() * 0.25;
-      if (warm) { this.sparkCol[i * 3] = 1; this.sparkCol[i * 3 + 1] = 0.7; this.sparkCol[i * 3 + 2] = 0.3; }
-      else { this.sparkCol[i * 3] = 0.9; this.sparkCol[i * 3 + 1] = 0.15; this.sparkCol[i * 3 + 2] = 0.12; }
+      const i = this.bitNext; this.bitNext = (i + 1) % MAX_BITS;
+      this.bitPos[i * 3] = x; this.bitPos[i * 3 + 1] = y; this.bitPos[i * 3 + 2] = z;
+      this.bitVel[i * 3] = (Math.random() - 0.5) * 4; this.bitVel[i * 3 + 1] = Math.random() * 3.2; this.bitVel[i * 3 + 2] = (Math.random() - 0.5) * 4;
+      this.bitLife[i] = 0.4 + Math.random() * 0.5;
+      const paper = Math.random() < 0.25;
+      const c = paper ? [0.93, 0.93, 0.9] : [0.62 + Math.random() * 0.1, 0.45 + Math.random() * 0.08, 0.27];
+      this.bitCol.set(c, i * 3);
     }
   }
 
   muzzle(x: number, y: number, z: number) {
     this.flash.position.set(x, y, z);
-    this.flash.intensity = 6;
+    this.flash.intensity = 4;
     this.flashLife = 0.05;
   }
 
   update(dt: number) {
-    for (let i = 0; i < MAX_TRACERS; i++) {
-      if (this.tracerLife[i] <= 0) continue;
-      this.tracerLife[i] -= dt;
-      if (this.tracerLife[i] <= 0) { this.tracerPos.fill(0, i * 6, i * 6 + 6); this.paintTracer(i, 0); }
-      else this.paintTracer(i, this.tracerLife[i] / 0.07);
+    for (let i = 0; i < MAX_BOXES; i++) {
+      if (this.bage[i] < 0) continue;
+      this.bage[i] += dt;
+      const o = i * 3;
+      this.bv[o + 1] -= BOX_GRAVITY * dt;
+      const sp = Math.hypot(this.bv[o], this.bv[o + 1], this.bv[o + 2]);
+      const dx = this.bv[o] / sp, dy = this.bv[o + 1] / sp, dz = this.bv[o + 2] / sp, seg = sp * dt;
+      const hit = this.hitTest(this.bx[o], this.bx[o + 1], this.bx[o + 2], dx, dy, dz, seg, this.bteam[i], this.bowner[i]);
+      this.bx[o] += dx * hit.t; this.bx[o + 1] += dy * hit.t; this.bx[o + 2] += dz * hit.t;
+      if (hit.t < seg || this.bage[i] > BOX_LIFE_S) {
+        if (hit.t < seg) this.bits(this.bx[o], this.bx[o + 1], this.bx[o + 2], hit.player ? 10 : 6);
+        this.bage[i] = -1; this.hide(i); continue;
+      }
+      for (let k = 0; k < 3; k++) this.brot[o + k] += this.bspin[o + k] * dt;
+      this.e.set(this.brot[o], this.brot[o + 1], this.brot[o + 2]);
+      this.q.setFromEuler(this.e);
+      const sz = this.bsize[i];
+      this.m.compose(this.p.set(this.bx[o], this.bx[o + 1], this.bx[o + 2]), this.q, this.s.set(sz, sz * 0.8, sz));
+      this.boxMesh.setMatrixAt(i, this.m);
     }
-    this.tracerGeo.attributes.position.needsUpdate = true;
-    this.tracerGeo.attributes.color.needsUpdate = true;
-    for (let i = 0; i < MAX_SPARKS; i++) {
-      if (this.sparkLife[i] <= 0) continue;
-      this.sparkLife[i] -= dt;
-      if (this.sparkLife[i] <= 0) { this.sparkPos[i * 3 + 1] = -100; continue; }
-      this.sparkVel[i * 3 + 1] -= 9.8 * dt;
-      this.sparkPos[i * 3] += this.sparkVel[i * 3] * dt;
-      this.sparkPos[i * 3 + 1] += this.sparkVel[i * 3 + 1] * dt;
-      this.sparkPos[i * 3 + 2] += this.sparkVel[i * 3 + 2] * dt;
+    this.boxMesh.instanceMatrix.needsUpdate = true;
+    for (let i = 0; i < MAX_BITS; i++) {
+      if (this.bitLife[i] <= 0) continue;
+      this.bitLife[i] -= dt;
+      if (this.bitLife[i] <= 0) { this.bitPos[i * 3 + 1] = -100; continue; }
+      this.bitVel[i * 3 + 1] -= 9.8 * dt;
+      this.bitPos[i * 3] += this.bitVel[i * 3] * dt;
+      this.bitPos[i * 3 + 1] = Math.max(0.02, this.bitPos[i * 3 + 1] + this.bitVel[i * 3 + 1] * dt);
+      this.bitPos[i * 3 + 2] += this.bitVel[i * 3 + 2] * dt;
     }
-    this.sparkGeo.attributes.position.needsUpdate = true;
+    this.bitGeo.attributes.position.needsUpdate = true;
+    this.bitGeo.attributes.color.needsUpdate = true;
     if (this.flashLife > 0) { this.flashLife -= dt; if (this.flashLife <= 0) this.flash.intensity = 0; }
   }
 }

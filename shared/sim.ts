@@ -3,12 +3,12 @@
 // matches), so both play by identical rules.
 //
 // Authority: a human's movement is predicted by their own client and sent here; the host checks every step against
-// the walls and a speed limit and sends a correction when one fails. Shots are decided here: the host re-runs the ray
-// test against where everyone was at the moment the shooter saw them (up to 300 ms back).
+// the walls and a speed limit and sends a correction when one fails. Shots are decided here: each one launches real
+// cardboard boxes that fly tick by tick, and a box tests players where the shooter saw them (up to 300 ms back).
 
 import { BOXES, PICKUPS, SPAWNS, HALL, type PickupKind } from "./map";
 import { EYE_H, PLAYER_H, SPRINT_SPEED, blocked, lineOfSight, rayPlayer, rayWorld, stepBody, viewDir, type Body } from "./physics";
-import { WEAPONS, falloff, type WeaponId } from "./weapons";
+import { BOX_GRAVITY, BOX_LIFE_S, WEAPONS, falloff, type WeaponId } from "./weapons";
 import { findPath, freeAt, randomFree, walkable } from "./nav";
 import type { ClientMsg, Difficulty, Ev, HostMsg, PlayerSnap, SelfSnap } from "./proto";
 
@@ -24,14 +24,15 @@ export const SPAWN_PROTECT_S = 1.5;
 export const GEO_S = 10;
 export const MAX_REWIND_S = 0.3;
 const HIST = 48;
+const leadPos = [0, 0, 0];
 
 const BOT_NAMES = ["Zenek", "Halina", "Mirek", "Grażyna", "Waldek", "Bożena", "Rysiek", "Danuta", "Kazik", "Wiesia", "Janusz", "Krystyna"];
 const PICKUP_RESPAWN_S: Record<PickupKind, number> = { med: 20, ammo: 15, shotgun: 25, geo: 45 };
 
 const DIFF = {
-  easy: { react: 0.6, aimErr: 0.11, turn: 3.2, view: 32, burst: 0.35, pause: 0.55 },
-  normal: { react: 0.35, aimErr: 0.06, turn: 5.5, view: 45, burst: 0.5, pause: 0.35 },
-  hard: { react: 0.2, aimErr: 0.03, turn: 9, view: 60, burst: 0.8, pause: 0.2 },
+  easy: { react: 0.6, aimErr: 0.11, turn: 3.2, view: 32, burst: 0.35, pause: 0.55, lead: 0.3 },
+  normal: { react: 0.35, aimErr: 0.06, turn: 5.5, view: 45, burst: 0.5, pause: 0.35, lead: 0.7 },
+  hard: { react: 0.2, aimErr: 0.03, turn: 9, view: 60, burst: 0.8, pause: 0.2, lead: 1 },
 } as const;
 
 export function mulberry32(seed: number) {
@@ -78,6 +79,16 @@ interface Player {
   brain: Brain | null;
 }
 
+/** A cardboard box in flight. */
+interface Box {
+  owner: Player; team: Team; w: WeaponId;
+  x: number; y: number; z: number; vx: number; vy: number; vz: number;
+  /** Metres flown, for damage falloff. */
+  dist: number; born: number;
+  /** How far behind the present the shooter was looking, seconds: targets are tested at that moment. */
+  lag: number;
+}
+
 export interface SimOptions { bots: boolean; difficulty: Difficulty; seed?: number; maxPlayers?: number }
 
 export class Sim {
@@ -88,6 +99,7 @@ export class Sim {
   private players = new Map<number, Player>();
   private nextId = 1;
   private evs: Ev[] = [];
+  private boxes: Box[] = [];
   private pickups = PICKUPS.map((spot) => ({ spot, readyAt: 0 }));
   private rand: () => number;
   private colorSeq = 0;
@@ -168,6 +180,7 @@ export class Sim {
     const p = this.players.get(id);
     if (!p) return;
     this.players.delete(id);
+    this.boxes = this.boxes.filter((b) => b.owner !== p);
     this.evs.push({ k: "leave", name: p.name });
     this.fillBots();
   }
@@ -255,41 +268,51 @@ export class Sim {
     p.protectUntil = 0;
     const [vx, vy, vz] = viewDir(yaw, pitch);
     const cosMax = Math.cos(w.spread + w.moveSpread + 0.03);
-    const rewind = Math.max(this.time - MAX_REWIND_S, Math.min(this.time, viewT));
+    const lag = Math.max(0, Math.min(MAX_REWIND_S, this.time - viewT));
     const ox = p.body.x, oy = p.body.y + EYE_H, oz = p.body.z;
-    const ends: number[] = [];
-    const dmgBy = new Map<Player, { dmg: number; head: boolean; x: number; y: number; z: number }>();
-    const pos = [0, 0, 0], tOut = [0];
+    const sent: number[] = [];
     for (let i = 0; i < dirs.length; i += 3) {
       let dx = dirs[i], dy = dirs[i + 1], dz = dirs[i + 2];
       const len = Math.hypot(dx, dy, dz);
       if (len < 1e-6) continue;
       dx /= len; dy /= len; dz /= len;
       if (dx * vx + dy * vy + dz * vz < cosMax) { dx = vx; dy = vy; dz = vz; }
-      let best = rayWorld(ox, oy, oz, dx, dy, dz, 200);
-      let hitP: Player | null = null, head = false;
-      for (const q of this.players.values()) {
-        if (q === p || !q.alive || q.team === p.team) continue; // bullets pass teammates: no friendly fire
-        this.posAt(q, rewind, pos);
-        const part = rayPlayer(ox, oy, oz, dx, dy, dz, pos[0], pos[1], pos[2], tOut);
-        if (part && tOut[0] < best) { best = tOut[0]; hitP = q; head = part === 2; }
-      }
-      ends.push(+(ox + dx * best).toFixed(2), +(oy + dy * best).toFixed(2), +(oz + dz * best).toFixed(2));
-      if (hitP) {
-        const dmg = w.dmg * (head ? w.headMul : 1) * falloff(w, best);
-        if (dmg <= 0) continue;
-        const e = dmgBy.get(hitP) ?? { dmg: 0, head: false, x: 0, y: 0, z: 0 };
-        e.dmg += dmg; e.head ||= head;
-        e.x = ox + dx * best; e.y = oy + dy * best; e.z = oz + dz * best;
-        dmgBy.set(hitP, e);
-      }
+      this.boxes.push({ owner: p, team: p.team, w: p.w, x: ox, y: oy, z: oz, vx: dx * w.speed, vy: dy * w.speed, vz: dz * w.speed, dist: 0, born: this.time, lag });
+      sent.push(+dx.toFixed(4), +dy.toFixed(4), +dz.toFixed(4));
     }
-    this.evs.push({ k: "shot", id: p.id, w: p.w, o: [+ox.toFixed(2), +oy.toFixed(2), +oz.toFixed(2)], ends });
-    for (const [q, e] of dmgBy) this.damage(q, p, Math.round(e.dmg), e.head, e.x, e.y, e.z);
+    this.evs.push({ k: "shot", id: p.id, w: p.w, o: [+ox.toFixed(2), +oy.toFixed(2), +oz.toFixed(2)], dirs: sent });
     if (p.mag[p.w] === 0) this.startReload(p);
   }
 
-  private damage(q: Player, by: Player, dmg: number, head: boolean, x: number, y: number, z: number) {
+  /** Fly every box one step: walls stop it, the first enemy it meets takes the hit. Teammates let it through. */
+  private stepBoxes(dt: number) {
+    const pos = [0, 0, 0], tOut = [0];
+    for (let i = this.boxes.length - 1; i >= 0; i--) {
+      const b = this.boxes[i];
+      b.vy -= BOX_GRAVITY * dt;
+      const sp = Math.hypot(b.vx, b.vy, b.vz);
+      const dx = b.vx / sp, dy = b.vy / sp, dz = b.vz / sp, seg = sp * dt;
+      const tWall = rayWorld(b.x, b.y, b.z, dx, dy, dz, seg);
+      let tHit = tWall, hitP: Player | null = null, head = false;
+      for (const q of this.players.values()) {
+        if (q === b.owner || !q.alive || q.team === b.team) continue;
+        this.posAt(q, this.time - b.lag, pos);
+        const part = rayPlayer(b.x, b.y, b.z, dx, dy, dz, pos[0], pos[1], pos[2], tOut);
+        if (part && tOut[0] < tHit) { tHit = tOut[0]; hitP = q; head = part === 2; }
+      }
+      b.x += dx * tHit; b.y += dy * tHit; b.z += dz * tHit; b.dist += tHit;
+      const w = WEAPONS[b.w];
+      if (hitP) {
+        const dmg = Math.round(w.dmg * (head ? w.headMul : 1) * falloff(w, b.dist));
+        if (dmg > 0) this.damage(hitP, b.owner, dmg, head, b.x, b.y, b.z, b.w);
+        this.boxes.splice(i, 1);
+      } else if (tWall < seg || b.dist > w.range * 1.2 || this.time - b.born > BOX_LIFE_S) {
+        this.boxes.splice(i, 1);
+      }
+    }
+  }
+
+  private damage(q: Player, by: Player, dmg: number, head: boolean, x: number, y: number, z: number, w: WeaponId) {
     if (!q.alive || this.time < q.protectUntil || dmg <= 0 || (q.team === by.team && q !== by)) return;
     q.hp -= dmg;
     this.evs.push({ k: "hit", by: by.id, on: q.id, dmg, head, x: +x.toFixed(2), y: +y.toFixed(2), z: +z.toFixed(2) });
@@ -297,7 +320,7 @@ export class Sim {
     if (q.hp > 0) return;
     q.hp = 0; q.alive = false; q.d++; q.respawnAt = this.time + RESPAWN_S; q.killedBy = by.name; q.reloadUntil = 0;
     if (by !== q) { by.k++; this.score[by.team]++; }
-    this.evs.push({ k: "kill", by: by.id, on: q.id, w: by.w, head });
+    this.evs.push({ k: "kill", by: by.id, on: q.id, w, head });
     if (this.score[by.team] >= TEAM_FRAG_LIMIT) this.endMatch();
   }
 
@@ -315,6 +338,7 @@ export class Sim {
     this.phase = "play";
     this.matchEndT = this.time + TIME_LIMIT_S;
     this.score[0] = 0; this.score[1] = 0;
+    this.boxes.length = 0;
     for (const p of this.players.values()) { p.k = 0; p.d = 0; this.respawn(p); }
     for (const pk of this.pickups) pk.readyAt = 0;
     this.evs.push({ k: "start" });
@@ -364,6 +388,7 @@ export class Sim {
       p.hist[idx] = this.time; p.hist[idx + 1] = p.body.x; p.hist[idx + 2] = p.body.y; p.hist[idx + 3] = p.body.z;
       p.histN++;
     }
+    this.stepBoxes(dt);
   }
 
   private touchPickups(p: Player) {
@@ -461,8 +486,15 @@ export class Sim {
         br.errYaw = (this.rand() * 2 - 1) * e; br.errPitch = (this.rand() * 2 - 1) * e * 0.6; br.errUntil = this.time + 0.35 + this.rand() * 0.3;
       }
       const aimY = tgt.body.y + (this.opts.difficulty === "hard" && this.rand() < 0.3 ? 1.6 : 1.25) - ey;
-      const wantYaw = Math.atan2(-dx, -dz) + br.errYaw;
-      const wantPitch = Math.atan2(aimY, d) + br.errPitch;
+      // boxes take time to arrive and drop a little: lead a moving target (how well depends on the level) and aim
+      // above it by the drop over the flight
+      const speed = WEAPONS[p.w].speed;
+      this.posAt(tgt, this.time - 0.1, leadPos);
+      const flight = d / speed;
+      const px = dx + (tgt.body.x - leadPos[0]) * 10 * flight * cfg.lead, pz = dz + (tgt.body.z - leadPos[2]) * 10 * flight * cfg.lead;
+      const pd = Math.hypot(px, pz), pf = pd / speed;
+      const wantYaw = Math.atan2(-px, -pz) + br.errYaw;
+      const wantPitch = Math.atan2(aimY + 0.5 * BOX_GRAVITY * pf * pf, pd) + br.errPitch;
       let dy = wantYaw - p.yaw;
       while (dy > Math.PI) dy -= Math.PI * 2;
       while (dy < -Math.PI) dy += Math.PI * 2;

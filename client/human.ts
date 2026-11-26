@@ -1,4 +1,4 @@
-// A warehouse worker: hard hat, hi-vis vest in the player's colour, work trousers, a gun. Built from boxes so it needs
+// A warehouse worker: hard hat, hi-vis vest in the group's colour, work trousers, a cardboard launcher. Built from boxes so it needs
 // no model files; animated by code (walk swing from speed, aim pitch, a fall when eliminated).
 
 import * as THREE from "three";
@@ -19,24 +19,35 @@ const trousers = new THREE.MeshStandardMaterial({ color: 0x2b3240, roughness: 0.
 const boots = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.7 });
 const shirt = new THREE.MeshStandardMaterial({ color: 0x3a3d44, roughness: 0.8 });
 const reflect = new THREE.MeshStandardMaterial({ color: 0xdfe3ea, roughness: 0.2, metalness: 0.6, emissive: 0x303030 });
-const gunMat = new THREE.MeshStandardMaterial({ color: 0x1e1f23, roughness: 0.4, metalness: 0.7 });
 
-export function gunModel(w: WeaponId, mat: THREE.Material = gunMat): THREE.Group {
+const cardboard = new THREE.MeshStandardMaterial({ color: 0xb58e5c, roughness: 0.9 });
+const tape = new THREE.MeshStandardMaterial({ color: 0xd9c9a3, roughness: 0.5 });
+const scanGlass = new THREE.MeshBasicMaterial({ color: 0x474fff });
+
+/**
+ * A cardboard launcher: a taped box body, a tube to throw the boxes through, a grip and a little scanner window at the
+ * back (the beep). `mat` replaces the cardboard, for the first-person view's lighting.
+ */
+export function gunModel(w: WeaponId, mat: THREE.Material = cardboard): THREE.Group {
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x6b4a2b, roughness: 0.7 });
   if (w === "rifle") {
-    g.add(box(0.07, 0.09, 0.55, mat, 0, 0, -0.1));
-    g.add(box(0.03, 0.03, 0.3, mat, 0, 0.01, -0.5));
-    g.add(box(0.05, 0.16, 0.07, mat, 0, -0.1, -0.12));
-    g.add(box(0.06, 0.09, 0.22, mat, 0, -0.02, 0.25));
-    g.add(box(0.04, 0.05, 0.12, mat, 0, 0.07, -0.05));
+    g.add(box(0.12, 0.13, 0.42, mat, 0, 0, -0.05));          // body box
+    g.add(box(0.125, 0.03, 0.43, tape, 0, 0.05, -0.05));      // tape
+    g.add(box(0.1, 0.1, 0.32, mat, 0, 0.01, -0.4));           // tube
+    g.add(box(0.06, 0.15, 0.08, mat, 0, -0.12, 0.02));        // grip
+    g.add(box(0.14, 0.14, 0.12, mat, 0, 0.02, 0.24));         // shoulder box
+    g.add(box(0.05, 0.03, 0.005, scanGlass, 0, 0.03, 0.302)); // scanner window
   } else if (w === "pistol") {
-    g.add(box(0.05, 0.07, 0.22, mat, 0, 0, -0.05));
-    g.add(box(0.045, 0.13, 0.06, mat, 0, -0.08, 0.03));
+    g.add(box(0.08, 0.09, 0.22, mat, 0, 0, -0.05));
+    g.add(box(0.085, 0.025, 0.225, tape, 0, 0.03, -0.05));
+    g.add(box(0.06, 0.13, 0.07, mat, 0, -0.09, 0.03));
+    g.add(box(0.04, 0.02, 0.005, scanGlass, 0, 0.02, 0.062));
   } else {
-    g.add(box(0.08, 0.08, 0.6, mat, 0, 0, -0.15));
-    g.add(box(0.07, 0.06, 0.25, wood, 0, -0.06, -0.2));
-    g.add(box(0.06, 0.11, 0.25, wood, 0, -0.03, 0.27));
+    g.add(box(0.2, 0.15, 0.5, mat, 0, 0, -0.12));             // a wide box: the pallet launcher
+    g.add(box(0.205, 0.035, 0.51, tape, 0, 0.0, -0.12));
+    g.add(box(0.16, 0.12, 0.06, tape, 0, 0, -0.39));          // mouth rim
+    g.add(box(0.07, 0.15, 0.08, mat, 0, -0.13, 0.05));
+    g.add(box(0.06, 0.03, 0.005, scanGlass, 0, 0.04, 0.131));
   }
   return g;
 }

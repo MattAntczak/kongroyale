@@ -34,7 +34,7 @@ export interface SelfSnap {
 }
 
 export type Ev =
-  | { k: "shot"; id: number; w: WeaponId; o: [number, number, number]; ends: number[] }
+  | { k: "shot"; id: number; w: WeaponId; o: [number, number, number]; /** Unit launch direction of each box, xyz. */ dirs: number[] }
   | { k: "hit"; by: number; on: number; dmg: number; head: boolean; x: number; y: number; z: number }
   | { k: "kill"; by: number; on: number; w: WeaponId; head: boolean }
   | { k: "pick"; id: number; p: number; kind: PickupKind }

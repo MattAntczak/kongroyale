@@ -17,7 +17,7 @@ import type { Link } from "./net";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const INTERP_S = 0.1;
-const VM_GUN = new THREE.MeshStandardMaterial({ color: 0x4a4e57, roughness: 0.45, metalness: 0.25 });
+const VM_GUN = new THREE.MeshStandardMaterial({ color: 0xc29a66, roughness: 0.85 });
 const STATE_HZ = 30;
 
 export interface Settings { sens: number; vol: number; fov: number }
@@ -29,7 +29,7 @@ function saveSettings(s: Settings) { try { localStorage.setItem("efectivo.settin
 
 interface Snap { time: number; players: Map<number, PlayerSnap> }
 
-const PICK_TEXT = { med: "Apteczka · +50 zdrowia", ammo: "Amunicja uzupełniona", shotgun: "Strzelba w ręku · klawisz 3", geo: "efectivo GEO · widzisz wszystkich przez 10 s" } as const;
+const PICK_TEXT = { med: "Apteczka · +50 zdrowia", ammo: "Zapas paczek uzupełniony", shotgun: "Paletówka w ręku · klawisz 3", geo: "efectivo GEO · widzisz wszystkich przez 10 s" } as const;
 
 export class Game {
   private renderer: THREE.WebGLRenderer;
@@ -106,7 +106,7 @@ export class Game {
       const p = new THREE.PointLight(0xfff1dc, 40, 26, 1.6); p.position.set(x, 9.5, z); this.scene.add(p);
     }
     this.world = buildWorld(this.scene);
-    this.fx = new Fx(this.scene);
+    this.fx = new Fx(this.scene, this.boxHit);
 
     // first-person view model
     this.vmScene.add(new THREE.HemisphereLight(0xdfe4ff, 0x2a2622, 1.6));
@@ -114,7 +114,7 @@ export class Game {
     this.vmScene.add(this.vm);
     const sleeve = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.4), this.sleeveMat); sleeve.position.set(0.05, -0.06, 0.2); this.vm.add(sleeve);
     const hand = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.07, 0.08), new THREE.MeshStandardMaterial({ color: 0xe0b08c, roughness: 0.7 })); hand.position.set(0.015, -0.055, 0.03); this.vm.add(hand);
-    const flashTex = (() => { const c = document.createElement("canvas"); c.width = c.height = 64; const g = c.getContext("2d")!; const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, "rgba(255,240,200,1)"); gr.addColorStop(0.3, "rgba(255,180,80,0.8)"); gr.addColorStop(1, "rgba(255,120,0,0)"); g.fillStyle = gr; g.fillRect(0, 0, 64, 64); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; })();
+    const flashTex = (() => { const c = document.createElement("canvas"); c.width = c.height = 64; const g = c.getContext("2d")!; const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, "rgba(235,238,255,1)"); gr.addColorStop(0.3, "rgba(120,128,255,0.7)"); gr.addColorStop(1, "rgba(71,79,255,0)"); g.fillStyle = gr; g.fillRect(0, 0, 64, 64); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; })();
     this.vmFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.22), new THREE.MeshBasicMaterial({ map: flashTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
     this.vmFlash.visible = false;
     this.vm.add(this.vmFlash);
@@ -132,6 +132,23 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- input
+
+  private hitOut = [0];
+  private hitRes = { t: 0, player: false };
+
+  /** What a visual box meets first: a wall, or an alive player of the other group (never its own thrower). */
+  private boxHit = (x: number, y: number, z: number, dx: number, dy: number, dz: number, seg: number, team: number, owner: number) => {
+    const out = this.hitOut, r = this.hitRes;
+    r.t = rayWorld(x, y, z, dx, dy, dz, seg); r.player = false;
+    for (const [id, h] of this.humans) {
+      const o = this.names.get(id);
+      if (id === owner || !o?.alive || o.tm === team) continue;
+      const p = h.root.position;
+      if (rayPlayer(x, y, z, dx, dy, dz, p.x, p.y, p.z, out) && out[0] < r.t) { r.t = out[0]; r.player = true; }
+    }
+    if (this.alive && owner !== this.myId && team !== this.myTeam && rayPlayer(x, y, z, dx, dy, dz, this.body.x, this.body.y, this.body.z, out) && out[0] < r.t) { r.t = out[0]; r.player = true; }
+    return r;
+  };
 
   private on<K extends keyof WindowEventMap>(target: Window | Document | HTMLElement, type: K | string, fn: (e: any) => void, opts?: AddEventListenerOptions) {
     target.addEventListener(type, fn, opts);
@@ -247,11 +264,11 @@ export class Game {
     if (this.vmGunId === w) return;
     if (this.vmGun) this.vm.remove(this.vmGun);
     this.vmGun = gunModel(w, VM_GUN);
-    this.vmGun.scale.setScalar(0.62);
+    this.vmGun.scale.setScalar(0.48);
     this.vmGun.position.z = -0.08;
     this.vm.add(this.vmGun);
     this.vmGunId = w;
-    this.vmFlash.position.set(0, 0.01, (w === "pistol" ? -0.2 : w === "rifle" ? -0.68 : -0.5) * 0.62 - 0.08);
+    this.vmFlash.position.set(0, 0.01, (w === "pistol" ? -0.2 : w === "rifle" ? -0.6 : -0.42) * 0.48 - 0.08);
   }
 
   private serverNow() { return this.nowS + (this.offset ?? 0); }
@@ -272,23 +289,9 @@ export class Game {
     const dirs = spreadDirs(this.yaw, this.pitch, cone, w.pellets, Math.random);
     const view = this.serverNow() - INTERP_S;
     this.link.send({ t: "shoot", w: this.w, yaw: this.yaw, pitch: this.pitch, dirs, view });
-    // what we expect to happen: tracers to the first thing each pellet meets
-    const ox = this.body.x, oy = this.body.y + EYE_H - 0.06, oz = this.body.z;
-    const out = [0];
-    for (let i = 0; i < dirs.length; i += 3) {
-      const dx = dirs[i], dy = dirs[i + 1], dz = dirs[i + 2];
-      let best = rayWorld(ox, oy + 0.06, oz, dx, dy, dz, 200), hitPlayer = false;
-      for (const [id, h] of this.humans) {
-        const other = this.names.get(id);
-        if (id === this.myId || !other?.alive || other.tm === this.myTeam) continue; // no friendly fire
-        const p = h.root.position;
-        if (rayPlayer(ox, oy + 0.06, oz, dx, dy, dz, p.x, p.y, p.z, out) && out[0] < best) { best = out[0]; hitPlayer = true; }
-      }
-      const ex = ox + dx * best, ey = oy + 0.06 + dy * best, ez = oz + dz * best;
-      const r = viewDir(this.yaw - 0.9, 0);
-      this.fx.tracer(ox + r[0] * 0.18, oy - 0.08, oz + r[2] * 0.18, ex, ey, ez, true);
-      if (!hitPlayer) this.fx.sparks(ex, ey, ez, 4, true);
-    }
+    // our own boxes fly from the eye like the host's do, so they land where the host's land
+    const ox = this.body.x, oy = this.body.y + EYE_H, oz = this.body.z;
+    for (let i = 0; i < dirs.length; i += 3) this.fx.launch(ox, oy, oz, dirs[i], dirs[i + 1], dirs[i + 2], this.w, this.myTeam, this.myId);
     this.fx.muzzle(ox + dirs[0] * 0.8, oy, oz + dirs[2] * 0.8);
     sfx.shot(this.w);
     this.pitch = Math.min(1.5, this.pitch + w.kick * (0.6 + Math.random() * 0.5));
@@ -356,10 +359,8 @@ export class Game {
         if (e.id === this.myId) return;
         const [ox, oy, oz] = e.o;
         const dist = Math.hypot(ox - this.body.x, oz - this.body.z);
-        for (let i = 0; i < e.ends.length; i += 3) {
-          this.fx.tracer(ox, oy - 0.1, oz, e.ends[i], e.ends[i + 1], e.ends[i + 2], false);
-          this.fx.sparks(e.ends[i], e.ends[i + 1], e.ends[i + 2], 3, true);
-        }
+        const team = this.names.get(e.id)?.tm ?? -1;
+        for (let i = 0; i < e.dirs.length; i += 3) this.fx.launch(ox, oy, oz, e.dirs[i], e.dirs[i + 1], e.dirs[i + 2], e.w, team, e.id);
         if (dist < 40) this.fx.muzzle(ox, oy, oz);
         sfx.shot(e.w, dist);
         break;
@@ -369,8 +370,8 @@ export class Game {
           this.hitT = 0.15;
           $("hitmark").className = e.head ? "on head" : "on";
           sfx.hitMarker(e.head);
-          this.fx.sparks(e.x, e.y, e.z, 8, false);
-        } else this.fx.sparks(e.x, e.y, e.z, 6, false);
+        }
+        this.fx.bits(e.x, e.y, e.z, 8);
         if (e.on === this.myId) { this.hurtT = 0.6; sfx.hurt(); this.shake = Math.min(1, this.shake + 0.4); }
         break;
       case "kill": {

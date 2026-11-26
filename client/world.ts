@@ -4,6 +4,7 @@
 
 import * as THREE from "three";
 import { ANCHORS, BOXES, DOCKS, HALL, PICKUPS, ZONES, type Box, type PickupKind } from "../shared/map";
+import { gunModel } from "./human";
 
 const ACCENT = 0x474fff;
 
@@ -106,7 +107,7 @@ function wallTexture() {
   }, [1, 1]);
 }
 
-function cardboardTexture(tint: string, label: boolean) {
+export function cardboardTexture(tint: string, label: boolean) {
   return canvasTex(256, 256, (g) => {
     g.fillStyle = tint; g.fillRect(0, 0, 256, 256);
     noise(g, 256, 256, 0.07, 2500);
@@ -447,12 +448,13 @@ function pickupMesh(kind: PickupKind): THREE.Group {
     const cross = new THREE.MeshBasicMaterial({ color: 0x12b76a });
     add(new THREE.BoxGeometry(0.22, 0.07, 0.23), cross); add(new THREE.BoxGeometry(0.07, 0.22, 0.23), cross);
   } else if (kind === "ammo") {
-    add(new THREE.BoxGeometry(0.5, 0.3, 0.3), new THREE.MeshStandardMaterial({ color: 0x4b5320, roughness: 0.6, metalness: 0.3 }));
-    add(new THREE.BoxGeometry(0.52, 0.05, 0.31), new THREE.MeshStandardMaterial({ color: 0xe5b50a }), 0, 0.08, 0);
+    // a refill: a little stack of flat-packed boxes
+    const m = new THREE.MeshStandardMaterial({ map: cardboardTexture("#b58e5c", false), roughness: 0.85 });
+    add(new THREE.BoxGeometry(0.4, 0.14, 0.3), m, 0, -0.08, 0);
+    add(new THREE.BoxGeometry(0.34, 0.12, 0.26), m, 0.02, 0.05, 0).rotation.y = 0.3;
+    add(new THREE.BoxGeometry(0.22, 0.1, 0.18), m, -0.02, 0.16, 0).rotation.y = -0.2;
   } else if (kind === "shotgun") {
-    const m = new THREE.MeshStandardMaterial({ color: 0x2a2b30, metalness: 0.7, roughness: 0.35 });
-    add(new THREE.BoxGeometry(0.9, 0.08, 0.08), m); add(new THREE.BoxGeometry(0.3, 0.14, 0.07), new THREE.MeshStandardMaterial({ color: 0x6b4a2b }), -0.45, -0.04, 0);
-    add(new THREE.BoxGeometry(0.25, 0.08, 0.09), new THREE.MeshStandardMaterial({ color: 0x6b4a2b }), 0.15, -0.07, 0);
+    const g2 = gunModel("shotgun"); g2.scale.setScalar(1.3); g2.rotation.y = Math.PI / 2; g.add(g2);
   } else {
     // efectivo GEO: a black UWB tag with a glowing accent ring
     add(new THREE.BoxGeometry(0.32, 0.46, 0.1), new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.2, metalness: 0.6 }));
