@@ -43,6 +43,8 @@ export type ClientMsg =
   | { t: "team"; team: number }
   | { t: "config"; config: Config }
   | { t: "start" }
+  /** Buy a launcher or a grenade (freeze time and the first seconds of a round). */
+  | { t: "buy"; item: WeaponId }
   /** Holding E at the server (technicians). */
   | { t: "act"; on: boolean }
   /** E: get on the nearest forklift, or off the one we ride. */
@@ -79,6 +81,8 @@ export interface SelfSnap {
   /** Bumped every respawn and every forced correction: the client takes the host's position when it changes. */
   spawn: number; x: number; y: number; z: number; yaw: number;
   reloading: boolean; geo: number; killedBy: string; carry: boolean;
+  /** Money for the shop, and whether the shop is open right now. */
+  money: number; buy: boolean;
 }
 
 export type Ev =

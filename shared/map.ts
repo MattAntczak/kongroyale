@@ -36,7 +36,7 @@ export interface Ladder {
   dx: number;
 }
 
-export type PickupKind = "med" | "ammo" | "shotgun" | "geo";
+export type PickupKind = "med" | "ammo" | "geo";
 export interface PickupSpot { kind: PickupKind; x: number; z: number }
 export interface Point { x: number; z: number }
 
@@ -223,7 +223,7 @@ function build(cfg: Cfg): Layout {
   let n = 0;
   for (let x = -252; x <= 252; x += 36) pick(n++ % 2 ? "ammo" : "med", x, n % 4 < 2 ? 2.2 : -2.2);
   for (const x of [-190, 4, 200]) pick("geo", x, -5);
-  for (const x of [...westCross, ...eastCross]) { pick("shotgun", x, aisleZ(5)); pick("shotgun", x, -aisleZ(5)); pick("med", x, aisleZ(12)); pick("ammo", x, -aisleZ(12)); }
+  for (const x of [...westCross, ...eastCross]) { pick("med", x, aisleZ(12)); pick("ammo", x, -aisleZ(12)); }
   for (const x of eastCross) { pick("med", x, eastAisle); pick("ammo", x, -eastAisle); }
   for (const [x, z] of [[-68, 60], [-68, -60], [88, 60], [88, -60], [10, f * 20], [10, f * -20], [-30, f * -90], [50, f * -90], [30, f * 60], [-68, 120], [-68, -120], [88, 120], [88, -120]]) pick(n++ % 2 ? "ammo" : "med", x, z);
 
@@ -371,8 +371,8 @@ function buildDepot(): Layout {
   const pick = (kind: PickupKind, x: number, z: number) => { if (free(x, z, 1.2)) { pickups.push({ kind, x, z }); keep.push([x, z, 1.6]); } };
   for (const [k, x, z] of [
     ["med", -44, -14], ["ammo", -84, -30], ["ammo", -70, 5], ["med", -50, 26], ["med", -34, 18], ["ammo", 26, -26], ["geo", -16, -5],
-    ["shotgun", 0, -48], ["med", 30, -36], ["ammo", 64, -54], ["geo", 84, -50], ["med", 64, -18], ["ammo", 36, 16], ["med", 66, -12],
-    ["shotgun", 88, -28], ["med", 88, 14], ["ammo", 56, 28], ["ammo", -30, 54], ["med", 30, 54], ["shotgun", 48, 40], ["shotgun", -86, 26],
+    ["med", 30, -36], ["ammo", 64, -54], ["geo", 84, -50], ["med", 64, -18], ["ammo", 36, 16], ["med", 66, -12],
+    ["med", 88, 14], ["ammo", 56, 28], ["ammo", -30, 54], ["med", 30, 54], 
   ] as [PickupKind, number, number][]) pick(k, x, z);
   for (const [x, z, big] of [
     [-76, -30, 1], [-46, -28, 1], [-82, -14, 0], [-58, -12.5, 0], [-74, -14, 1], [-44, -20, 0],          // A

@@ -1233,8 +1233,6 @@ function pickupMesh(kind: PickupKind): THREE.Group {
     add(new THREE.BoxGeometry(0.4, 0.14, 0.3), m, 0, -0.08, 0);
     add(new THREE.BoxGeometry(0.34, 0.12, 0.26), m, 0.02, 0.05, 0).rotation.y = 0.3;
     add(new THREE.BoxGeometry(0.22, 0.1, 0.18), m, -0.02, 0.16, 0).rotation.y = -0.2;
-  } else if (kind === "shotgun") {
-    const g2 = gunModel("shotgun"); g2.scale.setScalar(1.3); g2.rotation.y = Math.PI / 2; g.add(g2);
   } else {
     // efectivo GEO: a black UWB tag with a glowing accent ring
     add(new THREE.BoxGeometry(0.32, 0.46, 0.1), new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.2, metalness: 0.6 }));

@@ -4,7 +4,7 @@
 
 import * as THREE from "three";
 import { EYE_H, rayPlayer, rayWorld, stepBody, viewDir, type Body } from "../shared/physics";
-import { AIM_SPREAD, WEAPONS, WEAPON_ORDER, type WeaponId } from "../shared/weapons";
+import { AIM_SPREAD, MONEY_START, PRICES, SHOP, WEAPONS, WEAPON_ORDER, type WeaponId } from "../shared/weapons";
 import { spreadDirs } from "../shared/sim";
 import type { Ev, HostMsg, PlayerSnap, VehicleSnap } from "../shared/proto";
 import { VEH_USE_R, seatPos, stepVehicle, vehicleBox as vehicleBoxInto, type VehicleState } from "../shared/vehicle";
@@ -34,7 +34,7 @@ function saveSettings(s: Settings) { try { localStorage.setItem("efectivo.settin
 
 interface Snap { time: number; players: Map<number, PlayerSnap>; vehicles: VehicleSnap[] }
 
-const PICK_TEXT = { med: "Apteczka · +50 zdrowia", ammo: "Zapas paczek uzupełniony", shotgun: "Paletówka w ręku · klawisz 3", geo: "efectivo GEO · widzisz wszystkich przez 10 s" } as const;
+const PICK_TEXT = { med: "Apteczka · +50 zdrowia", ammo: "Zapas paczek uzupełniony", geo: "efectivo GEO · widzisz wszystkich przez 10 s" } as const;
 
 export class Game {
   private renderer: THREE.WebGLRenderer;
@@ -80,9 +80,12 @@ export class Game {
   private alive = false;
   private keys = new Set<string>();
   private mouseDown = false; private clicked = false;
-  private w: WeaponId = "rifle";
-  private mag: Record<WeaponId, number> = { rifle: 30, pistol: 12, shotgun: 0, grenade: 2 };
-  private res: Record<WeaponId, number> = { rifle: 120, pistol: 999, shotgun: 0, grenade: 0 };
+  private w: WeaponId = "pistol";
+  /** The shop panel: open by itself at the start of a round, B toggles it; while open the number keys buy. */
+  private shopOpen = false;
+  private couldBuy = false;
+  private mag: Record<WeaponId, number> = { rifle: 30, pistol: 12, shotgun: 0, sniper: 0, grenade: 2 };
+  private res: Record<WeaponId, number> = { rifle: 120, pistol: 999, shotgun: 0, sniper: 0, grenade: 0 };
   /** Holding E on the server cable. */
   private acting = false;
   private caseMesh: THREE.Mesh;
@@ -97,7 +100,7 @@ export class Game {
   private bannerT = 0;
   private proj = new THREE.Vector3();
   private disposed = false;
-  private owned = new Set<WeaponId>(["rifle", "pistol"]);
+  private owned = new Set<WeaponId>(["pistol"]);
   private reloadUntil = 0; private reloadStart = 0;
   private fireReady = 0; private lastShotAt = -9; private lastSwitchAt = -9;
   private offset: number | null = null;
@@ -222,7 +225,7 @@ export class Game {
     this.vmFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.22), new THREE.MeshBasicMaterial({ map: flashTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
     this.vmFlash.visible = false;
     this.vm.add(this.vmFlash);
-    this.setVmGun("rifle");
+    this.setVmGun("pistol");
 
     this.mapCtx = $<HTMLCanvasElement>("mapc").getContext("2d")!;
     sfx.setVolume(this.settings.vol);
@@ -299,10 +302,20 @@ export class Game {
         if (this.canAct()) { this.acting = true; this.link.send({ t: "act", on: true }); }
         else this.link.send({ t: "use" });
       }
+      if (e.code === "KeyB" && this.latest?.me.buy) this.shopOpen = !this.shopOpen;
+      if (this.shopOpen && /^Digit[1-4]$/.test(e.code)) {
+        const item = SHOP[Number(e.code[5]) - 1], me = this.latest?.me;
+        const have = item === "grenade" ? this.mag.grenade >= WEAPONS.grenade.mag : this.owned.has(item);
+        if (!me?.buy || !this.alive || have) sfx.dryFire();
+        else if (me.money < PRICES[item]) { sfx.dryFire(); this.toast("Za mało pieniędzy"); }
+        else { this.link.send({ t: "buy", item }); sfx.pickup(); }
+        return;
+      }
       if (e.code === "Digit1") this.switchTo("rifle");
       if (e.code === "Digit2") this.switchTo("pistol");
       if (e.code === "Digit3") this.switchTo("shotgun");
-      if (e.code === "Digit4" && this.mag.grenade > 0) this.switchTo("grenade");
+      if (e.code === "Digit4") this.switchTo("sniper");
+      if ((e.code === "Digit5" || e.code === "KeyG") && this.mag.grenade > 0) this.switchTo("grenade");
       if (e.code === "KeyT" || e.code === "Enter") { e.preventDefault(); this.openChat(); }
     });
     this.on(window, "keyup", (e: KeyboardEvent) => {
@@ -364,6 +377,9 @@ export class Game {
     this.setVmGun(w);
   }
 
+  /** The launcher to fall back on: the best one in hand. */
+  private best(): WeaponId { return (["rifle", "sniper", "shotgun"] as const).find((w) => this.owned.has(w)) ?? "pistol"; }
+
   private cycleWeapon(dir: number) {
     const list = WEAPON_ORDER.filter((w) => this.owned.has(w));
     const i = list.indexOf(this.w);
@@ -387,7 +403,7 @@ export class Game {
     this.vmGun.position.z = -0.08;
     this.vm.add(this.vmGun);
     this.vmGunId = w;
-    this.vmFlash.position.set(0, 0.01, (w === "pistol" ? -0.2 : w === "rifle" ? -0.6 : -0.42) * 0.48 - 0.08);
+    this.vmFlash.position.set(0, 0.01, (w === "pistol" ? -0.2 : w === "rifle" ? -0.6 : w === "sniper" ? -0.86 : -0.42) * 0.48 - 0.08);
   }
 
   private serverNow() { return this.nowS + (this.offset ?? 0); }
@@ -400,7 +416,7 @@ export class Game {
     if (!want || !this.alive || !this.locked || this.latest?.phase !== "play") return;
     const now = this.nowS;
     if (this.reloadUntil || now < this.fireReady) return;
-    if (this.mag[this.w] <= 0) { sfx.dryFire(); this.fireReady = now + 0.25; if (this.w === "grenade") this.switchTo("rifle"); else this.reload(); return; }
+    if (this.mag[this.w] <= 0) { sfx.dryFire(); this.fireReady = now + 0.25; if (this.w === "grenade") this.switchTo(this.best()); else this.reload(); return; }
     this.fireReady = (now - this.fireReady > 0.1 ? now : this.fireReady) + 60 / w.rpm;
     this.mag[this.w]--;
     this.lastShotAt = now;
@@ -417,7 +433,7 @@ export class Game {
     this.pitch = Math.min(1.5, this.pitch + w.kick * (0.6 + Math.random() * 0.5));
     this.yaw += (Math.random() - 0.5) * w.kick * 0.5;
     this.vmKick = 1; this.vmFlashT = 0.045; this.shake = Math.min(1, this.shake + w.kick * 8);
-    if (this.w === "grenade") { if (this.mag.grenade === 0) this.switchTo("rifle"); }
+    if (this.w === "grenade") { if (this.mag.grenade === 0) this.switchTo(this.best()); }
     else if (this.mag[this.w] === 0) this.reload();
   }
 
@@ -477,6 +493,8 @@ export class Game {
       if (respawned) { this.yaw = me.yaw; this.pitch = 0; }
     }
     this.alive = me.alive; this.myGroup = me.group & 1;
+    // a launcher we did not have a snap ago: just bought, the host has put it in our hands, full
+    const bought = me.owned.some((w) => w !== "grenade" && !this.owned.has(w));
     this.owned = new Set(me.owned);
     // forklift: on getting into the driver's seat, or when the host overrules our driving, take its pose
     if (me.veh !== this.veh || me.seat !== this.seat || (me.veh >= 0 && me.seat === 0 && me.vrev !== this.vrev)) {
@@ -494,12 +512,19 @@ export class Game {
       this.humans.clear();
     }
     this.sleeveMat.color.setHex(TEAM_COLORS[me.team & 1]);
-    if (now - this.lastSwitchAt > 0.6 && me.w !== this.w) { this.w = me.w; this.setVmGun(me.w); }
+    if ((bought || now - this.lastSwitchAt > 0.6) && me.w !== this.w) { this.w = me.w; this.setVmGun(me.w); }
+    // the host dropped any reload when it handed over the launcher; a stale local timer or shot must not hold back its ammo
+    if (bought) { this.reloadUntil = 0; this.lastShotAt = -9; this.fireReady = Math.max(this.fireReady, now + 0.25); }
     const quietGun = now - this.lastShotAt > 0.4;
     const reloadDone = !this.reloadUntil || now > this.reloadUntil + 0.25;
     if (quietGun && reloadDone && !me.reloading) { this.mag = { ...me.mag }; this.res = { ...me.res }; this.reloadUntil = 0; }
     if (!me.alive) { this.reloadUntil = 0; }
-    if (!this.owned.has(this.w)) this.switchTo("rifle");
+    if (!this.owned.has(this.w)) this.switchTo(this.best());
+    // the shop opens by itself when buying becomes possible and shuts when the time is up
+    // (for the freeze only: once the round is live 1-4 are weapon slots again, and B reopens the shop while buying lasts)
+    const autoShop = me.buy && m.phase === "freeze";
+    if (autoShop !== this.couldBuy) { this.couldBuy = autoShop; this.shopOpen = autoShop; }
+    if (!me.buy) this.shopOpen = false;
     this.world.setPickups(m.pickups);
     if (prevPhase === "play" && m.phase === "end") this.showEnd(true);
     if (m.phase === "play") $("end").hidden = true;
@@ -544,7 +569,7 @@ export class Game {
         }
         break;
       }
-      case "pick": if (e.id === this.myId) { this.toast(PICK_TEXT[e.kind]); sfx.pickup(); if (e.kind === "shotgun" && !this.owned.has("shotgun")) this.owned.add("shotgun"); } break;
+      case "pick": if (e.id === this.myId) { this.toast(PICK_TEXT[e.kind]); sfx.pickup(); } break;
       case "join": this.feed(`<b>${esc(e.name)}</b> wchodzi na halę`, false); break;
       case "leave": this.feed(`<b>${esc(e.name)}</b> kończy zmianę`, false); break;
       case "chat": this.chat(e.name, e.text); break;
@@ -567,7 +592,7 @@ export class Game {
       }
       case "round":
         $("end").hidden = true;
-        if (e.swapped && e.n > 1 && this.latest && !this.latest.obj.swapped) this.banner("Zmiana stron", "Drużyny zamieniają się rolami");
+        if (e.swapped && e.n > 1 && this.latest && !this.latest.obj.swapped) this.banner("Zmiana stron", `Drużyny zamieniają się rolami · wszyscy zaczynają od ${MONEY_START} zł i Paczkownika`);
         break;
       case "roundEnd": {
         const tags = this.latest?.mission === "tags";
@@ -891,8 +916,19 @@ export class Game {
     this.set("hp", String(hp));
     ($("hpbar").firstElementChild as HTMLElement).style.width = hp + "%";
     $("hpbar").classList.toggle("low", hp <= 35);
+    this.set("money", `${m.me.money} zł`);
+    $("shop").hidden = !(this.shopOpen && m.me.buy && this.alive);
+    if (!$("shop").hidden) {
+      const left = m.phase === "freeze" ? "do startu rundy" : "jeszcze kilka sekund";
+      this.set("shop", `<h3>Sklep <span>${left} · B zamyka</span></h3>` + SHOP.map((id, k) => {
+        const have = id === "grenade" ? this.mag.grenade >= WEAPONS.grenade.mag : this.owned.has(id);
+        const cls = have ? "have" : m.me.money < PRICES[id] ? "no" : "";
+        const note = id === "rifle" ? "serie, celownik 2×" : id === "shotgun" ? "garść paczek, z bliska" : id === "sniper" ? "luneta 4×, daleki zasięg" : `rzut łukiem, masz ${this.mag.grenade} z ${WEAPONS.grenade.mag}`;
+        return `<div class="${cls}"><kbd>${k + 1}</kbd><span>${WEAPONS[id].name}<small>${note}</small></span><b>${have ? "masz" : PRICES[id] + " zł"}</b></div>`;
+      }).join(""), true);
+    }
     const w = WEAPONS[this.w];
-    // four slots, always in the same place: 1 2 3 4
+    // five slots, always in the same place: 1 2 3 4 5
     this.set("slots", WEAPON_ORDER.map((id, k) => {
       const def = WEAPONS[id], own = this.owned.has(id) && (id !== "grenade" || this.mag.grenade > 0);
       const count = !this.owned.has(id) ? "" : id === "grenade" ? `${this.mag.grenade}` : `${this.mag[id]}<small>/${this.res[id] >= 900 ? "∞" : this.res[id]}</small>`;

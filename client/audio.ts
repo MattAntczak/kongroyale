@@ -46,6 +46,7 @@ const BEEP = {
   rifle: { f: 2750, d: 0.055, n: 1 },
   pistol: { f: 3150, d: 0.08, n: 1 },
   shotgun: { f: 2250, d: 0.06, n: 2 },
+  sniper: { f: 3600, d: 0.14, n: 1 },
   grenade: { f: 1500, d: 0.11, n: 1 },
 } as const;
 

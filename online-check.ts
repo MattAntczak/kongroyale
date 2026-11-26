@@ -64,12 +64,12 @@ const vb = b.snap.vehicles[0], meB = b.snap.players.find((p: any) => p.id === b.
 console.log("forklift seen by B", vb.x.toFixed(1), "driver", vb.d === a.id, "thrower", vb.g === b.id, "B rides at", meB.x.toFixed(1), meB.y);
 check(vb.x > v0.x + 1 && Math.hypot(meB.x - vb.x, meB.z - vb.z) < 1.6, "the forklift moved and carried the thrower");
 // B throws a box from the platform
-const shotsBefore = b.snap.me.mag.rifle;
-b.ws.send(JSON.stringify({ t: "shoot", w: "rifle", yaw: 0, pitch: 0, dirs: [0, 0, -1], view: b.snap.time }));
-a.ws.send(JSON.stringify({ t: "shoot", w: "rifle", yaw: 0, pitch: 0, dirs: [0, 0, -1], view: a.snap.time }));
+const shotsBefore = b.snap.me.mag.pistol;
+b.ws.send(JSON.stringify({ t: "shoot", w: "pistol", yaw: 0, pitch: 0, dirs: [0, 0, -1], view: b.snap.time }));
+a.ws.send(JSON.stringify({ t: "shoot", w: "pistol", yaw: 0, pitch: 0, dirs: [0, 0, -1], view: a.snap.time }));
 await sleep(600);
-console.log("thrower mag", shotsBefore, "->", b.snap.me.mag.rifle, "| driver mag", a.snap.me.mag.rifle, "(driver cannot throw)");
-check(b.snap.me.mag.rifle === shotsBefore - 1 && a.snap.me.mag.rifle === 30, "only the thrower throws");
+console.log("thrower mag", shotsBefore, "->", b.snap.me.mag.pistol, "| driver mag", a.snap.me.mag.pistol, "(driver cannot throw)");
+check(b.snap.me.mag.pistol === shotsBefore - 1 && a.snap.me.mag.pistol === 12, "only the thrower throws");
 a.ws.send(JSON.stringify({ t: "use" })); b.ws.send(JSON.stringify({ t: "use" })); await sleep(300);
 console.log("off", a.snap.me.veh, b.snap.me.veh);
 check(a.snap.me.veh === -1 && b.snap.me.veh === -1, "both got off");

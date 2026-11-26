@@ -203,17 +203,34 @@ function gunGeo(w: WeaponId): [G, G] {
     db(FLUTE, 0.14, 0.012, 0.004, 0, 0.084, 0.302); db(FLUTE, 0.14, 0.012, 0.004, 0, -0.044, 0.302);
     db(BARCODE, 0.08, 0.003, 0.08, 0, 0.0915, 0.24);
   } else if (w === "pistol") {
+    // a label gun: a small box with a roll of barcode labels on top and a slot for a mouth
     kb(0.08, 0.09, 0.22, 0, 0, -0.05);
     kb(0.06, 0.13, 0.07, 0, -0.09, 0.03, 0.18);
-    k.push(kraft(new THREE.CylinderGeometry(0.022, 0.022, 0.16, 8), 0, 0.078, -0.04, Math.PI / 2)); // the scope: a kitchen-roll tube
+    d.push(part(new THREE.CylinderGeometry(0.04, 0.04, 0.05, 12).rotateZ(Math.PI / 2), BARCODE, 0, 0.075, 0.0)); // the roll
+    d.push(part(new THREE.CylinderGeometry(0.012, 0.012, 0.06, 6).rotateZ(Math.PI / 2), DARK, 0, 0.075, 0.0));
+    db(BARCODE, 0.05, 0.003, 0.13, 0, 0.0465, -0.09);                                // the strip of labels fed to the mouth
     db(TAPE, 0.085, 0.095, 0.04, 0, 0, -0.11);
-    for (const z of [-0.09, 0.01]) { db(TAPE, 0.03, 0.03, 0.02, 0, 0.058, z); tube(TAPE, 0.024, 0.02, 0, 0.078, z, 8); }
-    d.push(part(new THREE.CircleGeometry(0.018, 8), GLOW, 0, 0.078, 0.0405));        // the eyepiece glows toward the shooter
-    d.push(part(new THREE.CircleGeometry(0.018, 8).rotateY(Math.PI), DARK, 0, 0.078, -0.1205));
-    db(DARK, 0.05, 0.05, 0.003, 0, 0.005, -0.1612);                                  // the mouth
+    db(DARK, 0.06, 0.012, 0.003, 0, 0.02, -0.1612);                                  // the mouth: a slot
     scanner(0.055, 0.035, 0.07, 0, -0.062, -0.12);
     db(FLUTE, 0.08, 0.01, 0.003, 0, 0.04, 0.0612); db(FLUTE, 0.08, 0.01, 0.003, 0, -0.04, 0.0612);
     db(BARCODE, 0.003, 0.05, 0.07, -0.0412, 0, -0.03);
+  } else if (w === "sniper") {
+    // the long one: a carpet tube on a narrow box, a shoulder box, and a scope made of a kitchen-roll tube
+    kb(0.1, 0.11, 0.5, 0, 0, -0.05);
+    k.push(kraft(new THREE.CylinderGeometry(0.036, 0.036, 0.62, 10), 0, 0.01, -0.53, Math.PI / 2));
+    kb(0.06, 0.15, 0.08, 0, -0.12, 0.06, 0.2);                                      // grip
+    kb(0.12, 0.15, 0.16, 0, -0.005, 0.3);                                           // shoulder box
+    kb(0.05, 0.05, 0.16, 0, -0.07, -0.34);                                          // fore-end
+    k.push(kraft(new THREE.CylinderGeometry(0.03, 0.03, 0.3, 10), 0, 0.115, -0.04, Math.PI / 2)); // the scope
+    for (const z of [-0.14, 0.06]) { db(TAPE, 0.035, 0.04, 0.025, 0, 0.075, z); tube(TAPE, 0.032, 0.025, 0, 0.115, z, 10); }
+    d.push(part(new THREE.CircleGeometry(0.026, 10), GLOW, 0, 0.115, 0.1105));       // the eyepiece glows toward the shooter
+    d.push(part(new THREE.CircleGeometry(0.026, 10).rotateY(Math.PI), DARK, 0, 0.115, -0.1905));
+    db(TAPE, 0.105, 0.115, 0.05, 0, 0, -0.24); db(TAPE, 0.105, 0.115, 0.05, 0, 0, 0.12);
+    tube(TAPE, 0.038, 0.04, 0, 0.01, -0.45); tube(TAPE, 0.039, 0.03, 0, 0.01, -0.825);
+    d.push(part(new THREE.CircleGeometry(0.032, 10).rotateY(Math.PI), DARK, 0, 0.01, -0.8405));
+    scanner(0.05, 0.04, 0.08, 0, -0.045, -0.78);
+    db(FLUTE, 0.12, 0.012, 0.004, 0, 0.066, 0.382); db(FLUTE, 0.12, 0.012, 0.004, 0, -0.076, 0.382);
+    db(BARCODE, 0.003, 0.06, 0.1, -0.0512, 0, 0.0);
   } else if (w === "grenade") {
     kb(0.2, 0.16, 0.2, 0, -0.02, -0.12);                                            // a taped parcel, held ready to throw
     db(TAPE, 0.05, 0.165, 0.205, 0, -0.02, -0.12); db(TAPE, 0.205, 0.163, 0.05, 0, -0.02, -0.12);

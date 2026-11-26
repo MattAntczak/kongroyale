@@ -80,6 +80,21 @@ function glintTexture() {
   });
 }
 
+let labelTex: THREE.CanvasTexture | null = null;
+/** A shipping label: white paper, a barcode, a line of digits. One texture for every label in flight. */
+function labelTexture(): THREE.CanvasTexture {
+  if (labelTex) return labelTex;
+  const c = document.createElement("canvas"); c.width = 128; c.height = 80;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "#fbfbf8"; g.fillRect(0, 0, 128, 80);
+  g.fillStyle = "#111";
+  let x = 10;
+  for (const w of [3, 1, 2, 1, 4, 1, 1, 3, 2, 1, 1, 4, 2, 1, 3, 1, 2, 2, 1, 3, 1, 1, 4, 1, 2]) { if (x + w > 118) break; g.fillRect(x, 10, w, 46); x += w + 2; }
+  g.font = "600 13px monospace"; g.textAlign = "center"; g.fillText("5 901234 123457", 64, 72);
+  labelTex = new THREE.CanvasTexture(c); labelTex.colorSpace = THREE.SRGBColorSpace;
+  return labelTex;
+}
+
 export class Fx {
   private boxMesh: THREE.InstancedMesh;
   private bx = new Float32Array(MAX_BOXES * 3);
@@ -91,6 +106,9 @@ export class Fx {
   private bteam = new Int8Array(MAX_BOXES);
   private bowner = new Int32Array(MAX_BOXES);
   private bnade = new Uint8Array(MAX_BOXES);
+  /** The Paczkownik throws barcode labels: the same flight, drawn as a flat white sticker. */
+  private labelMesh: THREE.InstancedMesh;
+  private blabel = new Uint8Array(MAX_BOXES);
   private bnext = 0;
   private boxesLive = false;
   private bitGeo = new THREE.BufferGeometry();
@@ -142,6 +160,11 @@ export class Fx {
     // the colour buffer has to exist before the first render, or the material compiles without it
     for (let i = 0; i < MAX_BOXES; i++) { this.hide(i); this.boxMesh.setColorAt(i, this.c.setRGB(1, 1, 1)); }
     scene.add(this.boxMesh);
+    this.labelMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ map: labelTexture(), roughness: 0.6, emissive: 0xffffff, emissiveMap: labelTexture(), emissiveIntensity: 0.35 }), MAX_BOXES);
+    this.labelMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.labelMesh.frustumCulled = false;
+    for (let i = 0; i < MAX_BOXES; i++) this.hide(i);
+    scene.add(this.labelMesh);
 
     this.bitGeo.setAttribute("position", new THREE.BufferAttribute(this.bitPos, 3).setUsage(THREE.DynamicDrawUsage));
     this.bitGeo.setAttribute("color", new THREE.BufferAttribute(this.bitCol, 3));
@@ -200,16 +223,19 @@ export class Fx {
   private hide(i: number) {
     this.m.makeScale(0, 0, 0);
     this.boxMesh.setMatrixAt(i, this.m);
+    this.labelMesh?.setMatrixAt(i, this.m);
   }
 
   /** Launch one visual box from (x, y, z) along a unit direction. */
   launch(x: number, y: number, z: number, dx: number, dy: number, dz: number, w: WeaponId, team: number, owner: number) {
     const i = this.bnext; this.bnext = (i + 1) % MAX_BOXES;
+    if (this.bage[i] >= 0) this.hide(i); // recycled while still flying: clear it in both meshes, its kind may change
     const def = WEAPONS[w];
     this.bx[i * 3] = x; this.bx[i * 3 + 1] = y; this.bx[i * 3 + 2] = z;
     this.bv[i * 3] = dx * def.speed; this.bv[i * 3 + 1] = dy * def.speed; this.bv[i * 3 + 2] = dz * def.speed;
     for (let k = 0; k < 3; k++) { this.brot[i * 3 + k] = Math.random() * 6.28; this.bspin[i * 3 + k] = (Math.random() - 0.5) * 18; }
     this.bsize[i] = def.size; this.bage[i] = 0; this.bteam[i] = team; this.bowner[i] = owner; this.bnade[i] = w === "grenade" ? 1 : 0;
+    this.blabel[i] = w === "pistol" ? 1 : 0;
     // every parcel a slightly different cardboard; the grenade is a darker, redder one so it can be told apart in the air
     const v = 0.88 + Math.random() * 0.2;
     this.boxMesh.setColorAt(i, w === "grenade" ? this.c.setRGB(1, 0.62, 0.5) : this.c.setRGB(v, v, v * 0.97));
@@ -294,10 +320,12 @@ export class Fx {
         this.e.set(this.brot[o], this.brot[o + 1], this.brot[o + 2]);
         this.q.setFromEuler(this.e);
         const sz = this.bsize[i];
-        this.m.compose(this.p.set(this.bx[o], this.bx[o + 1], this.bx[o + 2]), this.q, this.s.set(sz, sz * 0.8, sz));
-        this.boxMesh.setMatrixAt(i, this.m);
+        if (this.blabel[i]) this.s.set(sz * 2.4, sz * 0.06, sz * 1.5); else this.s.set(sz, sz * 0.8, sz);
+        this.m.compose(this.p.set(this.bx[o], this.bx[o + 1], this.bx[o + 2]), this.q, this.s);
+        (this.blabel[i] ? this.labelMesh : this.boxMesh).setMatrixAt(i, this.m);
       }
       this.boxMesh.instanceMatrix.needsUpdate = true;
+      this.labelMesh.instanceMatrix.needsUpdate = true;
       this.boxesLive = live;
     }
     if (this.bitsLive) {

@@ -19,6 +19,7 @@
     <div class="hud-tl">
       <div class="team" id="teamChip"></div>
       <div class="vital"><b id="hp">100</b><div class="hpbar" id="hpbar"><i></i></div></div>
+      <div class="money" id="money"></div>
       <div class="carry" id="carry" hidden>Niesiesz tagi zegarkowe · widać cię na mapie</div>
     </div>
     <div class="hud-top" id="score"></div>
@@ -36,6 +37,7 @@
     <div id="usePrompt" hidden><kbd>E</kbd><span id="usePromptText"></span></div>
     <div id="chat"></div>
     <input id="chatbox" class="field" maxlength="120" placeholder="Wiadomość do hali…" hidden />
+    <div id="shop" hidden></div>
     <div class="slots" id="slots"></div>
     <div id="vignette"></div>
   </div>
@@ -116,12 +118,13 @@
         <div class="card">
           <div class="card-head"><h2>Co znajdziesz na hali</h2><span class="badge badge-gray">Dwie mapy: Zajezdnia i hala w 3 konfiguracjach</span></div>
           <div class="card-body items">
-            <div><b>Kartonomiot <kbd>1</kbd></b>Rzuca kartonami seriami, 30 w magazynku. Prawy przycisk: celownik 2×.</div>
-            <div><b>Paczkownik <kbd>2</kbd></b>Pojedyncze, celne paczki, nigdy się nie kończą. Prawy przycisk: luneta 4×.</div>
-            <div><b>Paletówka <kbd>3</kbd></b>Garść paczek naraz, mocna z bliska. Trzeba ją znaleźć na hali.</div>
-            <div><b>Kartonowy granat <kbd>4</kbd></b>Rzucany łukiem, rozsypuje się i razi rywali w promieniu 6 m. Masz dwa.</div>
+            <div><b>Kartonomiot <kbd>1</kbd></b>Rzuca kartonami seriami, 30 w magazynku. Prawy przycisk: celownik 2×. Do kupienia za 1800 zł.</div>
+            <div><b>Paczkownik <kbd>2</kbd></b>Strzela etykietami z kodem kreskowym. Pojedyncze, celne strzały, nigdy się nie kończą.</div>
+            <div><b>Paletówka <kbd>3</kbd></b>Garść paczek naraz, mocna z bliska. Do kupienia za 1200 zł.</div>
+            <div><b>Dalekomiot <kbd>4</kbd></b>Długa wyrzutnia z lunetą 4× pod prawym przyciskiem. Jedna ciężka paczka naraz, daleki zasięg. Do kupienia za 3500 zł.</div>
+            <div><b>Kartonowy granat <kbd>5</kbd></b>Rzucany łukiem, rozsypuje się i razi rywali w promieniu 8 m. 300 zł za sztukę, najwyżej dwa.</div>
             <div><b>Apteczka</b>Białe pudełko z zielonym krzyżem. Dodaje 50 zdrowia.</div>
-            <div><b>Zapas paczek</b>Stos złożonych kartonów. Uzupełnia amunicję i granaty.</div>
+            <div><b>Zapas paczek</b>Stos złożonych kartonów. Uzupełnia amunicję kupionych wyrzutni.</div>
             <div><b>efectivo GEO</b>Czarny tag z niebieskim pierścieniem. Przez 10 s widzisz wszystkich na mapie.</div>
             <div><b>Wózek widłowy <kbd>E</kbd></b>Pierwsza osoba prowadzi, druga rzuca z podestu. Karoseria osłania nogi.</div>
             <div><b>Regał z żółtą drabiną <kbd>W</kbd></b>Wejście na pomost snajperski. Bez osłony, a skok w dół boli.</div>
@@ -135,11 +138,12 @@
           <div><kbd>W A S D</kbd>Ruch</div>
           <div><kbd>Mysz</kbd>Rozglądanie się i celowanie</div>
           <div><kbd>LPM</kbd>Rzut</div>
-          <div><kbd>PPM</kbd>Celownik: Kartonomiot 2×, Paczkownik luneta 4×</div>
+          <div><kbd>PPM</kbd>Celownik: Kartonomiot 2×, Dalekomiot luneta 4×</div>
           <div><kbd>Shift</kbd>Sprint</div>
           <div><kbd>Spacja</kbd>Skok na niskie palety</div>
           <div><kbd>R</kbd>Przeładowanie</div>
-          <div><kbd>1 2 3 4</kbd>Wyrzutnie i granat</div>
+          <div><kbd>1 2 3 4 5</kbd>Wyrzutnie i granat</div>
+          <div><kbd>B</kbd>Sklep: na początku rundy kupujesz wyrzutnie i granaty</div>
           <div><kbd>E</kbd>Wózek widłowy. Przy punkcie A lub B przytrzymaj: podłączanie albo odłączanie</div>
           <div><kbd>Tab</kbd>Tablica wyników</div>
           <div><kbd>T</kbd>Czat</div>

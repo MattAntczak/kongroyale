@@ -31,9 +31,14 @@ a pokoje online obsługuje mały serwer Node.js z WebSocketami. Tryb z botami dz
 - **Boty:** technicy idą jedną z trzech tras do punktu wylosowanego na rundę, pracownicy trzymają punkty A i B.
 - **Regały snajperskie (hala magazynowa):** kilka regałów w każdej konfiguracji jest niższych, ma żółtą drabinę i pomost na górze. Na
   pomoście nie ma osłony, skok z góry zabiera zdrowie, a trafiony bot namierza strzelca nawet z daleka.
-- **Lunety pod prawym przyciskiem myszy:** Kartonomiot ma celownik 2×, Paczkownik lunetę 4× i daleki zasięg.
-- **Cztery sloty:** Kartonomiot (serie), Paczkownik (pojedyncze paczki), Paletówka (garść paczek, do znalezienia na
-  hali) i kartonowy granat (rzucany łukiem, razi rywali w promieniu 6,5 m). Kartony naprawdę lecą, a zamiast
+- **Lunety pod prawym przyciskiem myszy:** Kartonomiot ma celownik 2×, Dalekomiot lunetę 4× i daleki zasięg.
+- **Sklep jak w CS:** wyrzutnie nie leżą na podłodze. Każdy zaczyna z darmowym Paczkownikiem i 800 zł. Sklep (klawisz
+  B, kupujesz klawiszami 1–4) działa w czasie odliczania i przez pierwsze 15 sekund rundy: Kartonomiot 1800 zł,
+  Paletówka 1200 zł, Dalekomiot 3500 zł, granat 300 zł. Wygrana runda daje 3000 zł, przegrana 1700 zł, eliminacja
+  300 zł, podłączenie albo odłączenie punktu 300 zł. Kto przeżył rundę, zachowuje wyrzutnie; kto odpadł, wraca do
+  Paczkownika. Po zamianie ról wszyscy zaczynają od 800 zł.
+- **Pięć slotów:** Kartonomiot (serie), Paczkownik (strzela etykietami z kodem kreskowym), Paletówka (garść paczek),
+  Dalekomiot (jedna ciężka paczka, luneta) i kartonowy granat (rzucany łukiem, razi rywali w promieniu 8 m). Kartony naprawdę lecą, a zamiast
   wystrzału słychać piknięcie skanera kodów.
 - **Wózki widłowe dla dwóch osób (10 na hali, 2 w Zajezdni):** pierwszy gracz, który naciśnie E, prowadzi. Drugi wskakuje na tylny
   podest i rzuca. Karoseria osłania nogi, a rzucający stoi odsłonięty.
@@ -68,10 +73,10 @@ Testy: `npm test` uruchamia typecheck oraz test bez grafiki. Ten test sprawdza:
 |---|---|
 | W A S D | Ruch, a w wózku gaz, wsteczny i skręt. W przy żółtej drabinie wchodzi na regał |
 | Mysz, LPM | Celowanie i rzut kartonem |
-| PPM | Celownik: Kartonomiot 2×, Paczkownik luneta 4× |
+| PPM | Celownik: Kartonomiot 2×, Dalekomiot luneta 4× |
 | Shift, Spacja | Sprint, skok na niskie palety |
 | R | Przeładowanie |
-| 1 2 3 4 | Kartonomiot, Paczkownik, Paletówka, kartonowy granat |
+| 1 2 3 4 5 | Kartonomiot, Paczkownik, Paletówka, Dalekomiot, kartonowy granat |
 | E | Wózek widłowy: wsiądź, wskocz na podest, wysiądź. Przy punkcie A lub B przytrzymaj: podłączanie albo odłączanie |
 | Tab | Tablica wyników |
 | T | Czat |

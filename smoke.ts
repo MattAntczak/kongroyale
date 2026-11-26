@@ -149,9 +149,15 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
   const srv = LAYOUTS[0].servers[1];
   const pt = P.get(t)!, pw = P.get(w)!;
   const obj = () => { const s = sim.snapshot(t); return s && s.t === "snap" ? s.obj : null; };
-  // the grenade first: thrown at the worker 12 m away along the main aisle, it bursts and hurts
-  pt.body.x = 64; pt.body.z = 0; pw.body.x = 76; pw.body.z = 0;
+  // the grenade first: thrown 12 m at a worker standing 16 m away along the main aisle, it bursts and hurts
+  pt.body.x = 64; pt.body.z = 0; pw.body.x = 80; pw.body.z = 0;
   for (let i = 0; i < 10; i++) sim.step(1 / TICK_HZ);
+  const moneyBefore = (pt as unknown as { money: number }).money = 700;
+  sim.receive(t, { t: "buy", item: "sniper" }); // too dear: nothing happens
+  sim.receive(t, { t: "buy", item: "grenade" }); sim.receive(t, { t: "buy", item: "grenade" }); sim.receive(t, { t: "buy", item: "grenade" });
+  const left = (pt as unknown as { money: number }).money;
+  console.log(`shop: ${moneyBefore} -> ${left} for ${pt.mag.grenade} grenades (a third does not fit)`);
+  if (left !== 100 || pt.mag.grenade !== 2) fail("shop");
   sim.receive(t, { t: "switch", w: "grenade" });
   for (let i = 0; i < 40; i++) sim.step(1 / TICK_HZ);
   const pitch = lobPitch(12, 0.3 - 1.62);

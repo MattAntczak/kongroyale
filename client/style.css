@@ -174,14 +174,25 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .hpbar { width: 190px; height: 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.25); overflow: hidden; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35); }
 .hpbar i { display: block; height: 100%; width: 100%; background: #22c55e; border-radius: 10px; transition: width 0.2s ease-out; }
 .hpbar.low i { background: var(--red-500); }
+.hud-tl .money { padding-left: 2px; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; color: #86efac; }
+/* the shop: a small panel above the slots, worked with the number keys so the mouse stays on the view */
+#shop { position: absolute; right: 16px; bottom: 130px; width: 340px; max-width: calc(100vw - 32px); box-sizing: border-box; padding: 12px; border-radius: 12px; background: rgba(15, 23, 42, 0.86); text-shadow: none; }
+#shop h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; }
+#shop h3 span { font-weight: 500; opacity: 0.7; }
+#shop div { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 7px 8px; border-radius: 8px; font-size: 14px; }
+#shop div.no { opacity: 0.4; }
+#shop div.have b { color: #86efac; }
+#shop kbd { font: 600 11px var(--font); padding: 1px 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.18); }
+#shop b { font-variant-numeric: tabular-nums; font-weight: 600; }
+#shop small { display: block; font-size: 11px; opacity: 0.65; }
 .hud-tl .carry { padding: 4px 10px; border-radius: 6px; background: var(--blue-500); font-size: 13px; font-weight: 500; text-shadow: none; }
 /* top right: the Live map, the feed under it */
 .hud-tr { position: absolute; right: 16px; top: 14px; display: grid; gap: 8px; justify-items: end; }
 #map { position: relative; width: 280px; border-radius: 10px; overflow: hidden; opacity: 0.92; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18); }
 #feed { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-/* bottom right: four slots, 1 2 3 4 */
+/* bottom right: five slots, 1 2 3 4 5 */
 .slots { position: absolute; right: 16px; bottom: 16px; display: flex; gap: 6px; text-shadow: none; }
-.slots div { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 8px; row-gap: 2px; min-width: 118px; padding: 8px 10px; border-radius: 10px; background: var(--panel); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid transparent; }
+.slots div { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 8px; row-gap: 2px; min-width: 104px; padding: 8px 10px; border-radius: 10px; background: var(--panel); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid transparent; }
 .slots div.on { border-color: #fff; background: rgba(15, 23, 42, 0.8); }
 .slots div.off { opacity: 0.4; }
 .slots kbd { font: 600 11px var(--font); padding: 1px 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.18); }
@@ -265,3 +276,10 @@ table.board tr.team th { background: #fff; font-size: 14px; font-weight: 600; pa
 
 @media (max-width: 960px) { .grid2, .teams { grid-template-columns: 1fr; } .setup-row .cta { margin-left: 0; } }
 @media (prefers-reduced-motion: reduce) { .live-pill .dot, .hud-top .obj.live { animation: none; } .crawl-text { animation: none; position: static; margin: 0 auto; transform: none; padding: 40px 0; } .crawl { overflow-y: auto; } }
+
+/* narrow windows: the five slots show only their key and ammo */
+@media (max-width: 1000px) {
+  .slots span { display: none; }
+  .slots div { min-width: 0; grid-template-columns: auto; }
+  .slots b { grid-column: auto; }
+}

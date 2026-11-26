@@ -12,7 +12,7 @@
 import { BOXES, PICKUPS, SPAWNS, HALL, LAYOUTS, HALL_LAYOUTS, DEPOT_LAYOUT, VEHICLE_SPAWNS, sites, useLayout, type Box as HallBox, type PickupKind, type PickupSpot } from "./map";
 import { SEATS, VEH_MAX_SPEED, VEH_USE_R, seatPos, stepVehicle, vehicleBlocked, vehicleBox, type VehicleState } from "./vehicle";
 import { EYE_H, PLAYER_H, SPRINT_SPEED, blocked, lineOfSight, rayPlayer, rayWorld, setDynamicBoxes, stepBody, viewDir, type Body } from "./physics";
-import { BOX_GRAVITY, BOX_LIFE_S, GRENADE_FUSE_S, GRENADE_GRAVITY, GRENADE_R, WEAPONS, falloff, lobPitch, type WeaponId } from "./weapons";
+import { BOX_GRAVITY, BOX_LIFE_S, GRENADE_FUSE_S, GRENADE_GRAVITY, GRENADE_R, WEAPONS, PRICES, SHOP, MONEY_START, MONEY_MAX, MONEY_WIN, MONEY_LOSS, MONEY_KILL, MONEY_POINT, BUY_S, falloff, lobPitch, type WeaponId } from "./weapons";
 import { findPath, freeAt, randomFree, walkable } from "./nav";
 import type { ClientMsg, Config, Difficulty, Ev, HostMsg, Mission, ObjSnap, PlayerSnap, SelfSnap } from "./proto";
 
@@ -52,7 +52,7 @@ const ROUTE_MID = [[120, 2.5], [40, -12], [-45, 2.5]];
 const ROUTE_FLANK = [[170, 102.5], [20, 106], [-66, 100]];
 
 const BOT_NAMES = ["Zenek", "Halina", "Mirek", "Grażyna", "Waldek", "Bożena", "Rysiek", "Danuta", "Kazik", "Wiesia", "Janusz", "Krystyna", "Staszek", "Jadwiga", "Heniek", "Tereska", "Bogdan", "Irena"];
-const PICKUP_RESPAWN_S: Record<PickupKind, number> = { med: 20, ammo: 15, shotgun: 25, geo: 45 };
+const PICKUP_RESPAWN_S: Record<PickupKind, number> = { med: 20, ammo: 15, geo: 45 };
 
 const DIFF = {
   easy: { react: 0.6, aimErr: 0.11, turn: 3.2, view: 32, burst: 0.35, pause: 0.55, lead: 0.3 },
@@ -105,6 +105,8 @@ interface Player {
   body: Body; yaw: number; pitch: number; moving: boolean;
   hp: number; alive: boolean; respawnAt: number; killedBy: string;
   w: WeaponId; mag: Record<WeaponId, number>; res: Record<WeaponId, number>; owned: Set<WeaponId>;
+  /** Money for the shop. */
+  money: number;
   fireReady: number; lastFire: number; reloadUntil: number;
   k: number; d: number; spawn: number; protectUntil: number; geoUntil: number;
   lastStateT: number;
@@ -173,6 +175,7 @@ export class Sim {
   private plant = 0;
   private defuse = 0;
   private armed = -1;
+  private playStart = 0;
   private bootEnd = 0;
   /** The point the technicians' bots go for this round. */
   private botSite = 0;
@@ -193,7 +196,7 @@ export class Sim {
       id: this.nextId++, name, bot, color: this.colorSeq++ % 10, team,
       body: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, onGround: true }, yaw: 0, pitch: 0, moving: false,
       hp: 100, alive: true, respawnAt: 0, killedBy: "",
-      w: "rifle", mag: { rifle: 0, pistol: 0, shotgun: 0, grenade: 0 }, res: { rifle: 0, pistol: 0, shotgun: 0, grenade: 0 }, owned: new Set(),
+      money: MONEY_START, w: "pistol", mag: { rifle: 0, pistol: 0, shotgun: 0, sniper: 0, grenade: 0 }, res: { rifle: 0, pistol: 0, shotgun: 0, sniper: 0, grenade: 0 }, owned: new Set(),
       fireReady: 0, lastFire: -99, reloadUntil: 0, k: 0, d: 0, spawn: 0, protectUntil: 0, geoUntil: 0, lastStateT: 0,
       hist: new Float64Array(HIST * 4), histN: 0,
       veh: -1, seat: 0, fallFrom: 0, acting: false, carry: false, group: team,
@@ -291,7 +294,7 @@ export class Sim {
     this.forklifts = VEHICLE_SPAWNS.map((v, i) => ({ id: i, st: { x: v.x, z: v.z, yaw: v.yaw, speed: 0 }, riders: [null, null], rev: 0, lastDriveT: 0 }));
     this.dynBoxes = VEHICLE_SPAWNS.map(() => ({ kind: "forklift", x0: 0, x1: 0, y0: 0, y1: 0, z0: 0, z1: 0 }));
     this.pickups = PICKUPS.map((spot) => ({ spot, readyAt: 0 }));
-    for (const p of this.players.values()) { p.k = 0; p.d = 0; p.veh = -1; p.team = p.group; this.respawn(p); }
+    for (const p of this.players.values()) { p.k = 0; p.d = 0; p.veh = -1; p.team = p.group; p.money = MONEY_START; this.respawn(p, false); }
     this.phase = "brief";
     this.phaseEnd = this.time + BRIEF_S;
     this.evs.push({ k: "start", layout: this.layout, mission: this.mission });
@@ -315,6 +318,7 @@ export class Sim {
       case "team": this.setTeam(p, m.team); break;
       case "config": this.setConfig(p, m.config); break;
       case "start": if (p.id === this.hostId) this.begin(); break;
+      case "buy": this.buy(p, m.item); break;
       case "drive": this.onDrive(p, m); break;
       case "chat": { const text = String(m.text).slice(0, 120).trim(); if (text) this.evs.push({ k: "chat", name: p.name, text }); break; }
     }
@@ -488,7 +492,7 @@ export class Sim {
       sent.push(+dx.toFixed(4), +dy.toFixed(4), +dz.toFixed(4));
     }
     this.evs.push({ k: "shot", id: p.id, w: p.w, o: [+ox.toFixed(2), +oy.toFixed(2), +oz.toFixed(2)], dirs: sent });
-    if (p.w === "grenade" && p.mag.grenade === 0) { p.w = "rifle"; p.fireReady = this.time + 0.4; }
+    if (p.w === "grenade" && p.mag.grenade === 0) { p.owned.delete("grenade"); p.w = p.owned.has("rifle") ? "rifle" : p.owned.has("sniper") ? "sniper" : p.owned.has("shotgun") ? "shotgun" : "pistol"; p.fireReady = this.time + 0.4; }
     else if (p.mag[p.w] === 0) this.startReload(p);
   }
 
@@ -550,7 +554,7 @@ export class Sim {
     this.leaveForklift(q, false);
     q.hp = 0; q.alive = false; q.d++; q.killedBy = by.name; q.reloadUntil = 0; q.acting = false;
     if (q.carry) { q.carry = false; this.caseAt = { x: q.body.x, z: q.body.z }; this.evs.push({ k: "obj", what: "casedrop", id: q.id, site: 0 }); }
-    if (by !== q) { by.k++; this.score[by.team]++; }
+    if (by !== q) { by.k++; this.score[by.team]++; this.pay(by, MONEY_KILL); }
     this.evs.push({ k: "kill", by: by.id, on: q.id, w, head });
   }
 
@@ -559,17 +563,19 @@ export class Sim {
   /** Everyone back on their side, the points reset, the case to one technician; then the freeze. */
   private startRound() {
     this.round++;
+    let fresh = false;
     if (this.round === SWAP_AFTER + 1 && !this.swapped) {
-      // half time: the teams trade roles
-      this.swapped = true;
-      for (const p of this.players.values()) p.team = (1 - p.group) as Team;
+      // half time: the teams trade roles, and everybody starts over with the starting money and the Paczkownik
+      this.swapped = true; fresh = true;
+      for (const p of this.players.values()) { p.team = (1 - p.group) as Team; p.money = MONEY_START; }
     }
     this.plant = 0; this.defuse = 0; this.armed = -1; this.caseAt = null; this.boxes.length = 0;
     this.botSite = this.rand() < 0.5 ? 0 : 1;
     this.forklifts = VEHICLE_SPAWNS.map((v, i) => ({ id: i, st: { x: v.x, z: v.z, yaw: v.yaw, speed: 0 }, riders: [null, null], rev: (this.forklifts[i]?.rev ?? 0) + 1, lastDriveT: 0 }));
     for (const pk of this.pickups) pk.readyAt = 0;
     this.spawnSeq = [Math.floor(this.rand() * 10), Math.floor(this.rand() * 10)];
-    for (const p of this.players.values()) { p.veh = -1; this.respawn(p); }
+    // whoever lived through the last round keeps their launchers; the others are back to the Paczkownik
+    for (const p of this.players.values()) { p.veh = -1; this.respawn(p, p.alive && !fresh); if (p.bot) this.botBuy(p); }
     if (this.mission === "tags") {
       const techs = [...this.players.values()].filter((p) => p.team === 1);
       const holder = techs[Math.floor(this.rand() * techs.length)];
@@ -587,7 +593,7 @@ export class Sim {
     this.wins[group]++;
     this.phase = "round";
     this.phaseEnd = this.time + ROUND_END_S;
-    for (const p of this.players.values()) p.acting = false;
+    for (const p of this.players.values()) { p.acting = false; this.pay(p, p.team === role ? MONEY_WIN : MONEY_LOSS); }
     this.evs.push({ k: "roundEnd", winner: role, group, reason, wins: [this.wins[0], this.wins[1]] });
   }
 
@@ -631,7 +637,7 @@ export class Sim {
         this.plant += dt / PLANT_S;
         if (this.plant >= 1) {
           this.armed = site; this.bootEnd = this.time + BOOT_S; this.plant = 0; who.carry = false; this.lastActEv = -99;
-          this.evs.push({ k: "obj", what: "armed", id: who.id, site });
+          this.evs.push({ k: "obj", what: "armed", id: who.id, site }); this.pay(who, MONEY_POINT);
         }
       } else this.plant = 0;
       if (this.armed < 0) {
@@ -645,14 +651,48 @@ export class Sim {
       if (who) {
         if (this.defuse === 0 && this.time - this.lastActEv > 5) { this.lastActEv = this.time; this.evs.push({ k: "obj", what: "defuse", id: who.id, site: this.armed }); }
         this.defuse += dt / DEFUSE_S;
-        if (this.defuse >= 1) { this.evs.push({ k: "obj", what: "defused", id: who.id, site: this.armed }); return this.endRound(0, "defuse"); }
+        if (this.defuse >= 1) { this.pay(who, MONEY_POINT); this.evs.push({ k: "obj", what: "defused", id: who.id, site: this.armed }); return this.endRound(0, "defuse"); }
       } else this.defuse = 0;
       if (this.time >= this.bootEnd) return this.endRound(1, "plant");
     }
     if (alive0 === 0 && any0) this.endRound(1, "out");
   }
 
-  private respawn(p: Player) {
+  private pay(p: Player, sum: number) { p.money = Math.min(MONEY_MAX, p.money + sum); }
+
+  /** The shop is open through the freeze and the first seconds of the round. */
+  private canBuy(p: Player) { return p.alive && (this.phase === "freeze" || (this.phase === "play" && this.time < this.playStart + BUY_S)); }
+
+  private buy(p: Player, item: WeaponId, open = this.canBuy(p)) {
+    // the item comes straight from a client: only what the shop sells, and only with the money for it
+    if (typeof item !== "string" || !SHOP.includes(item)) return;
+    const price = PRICES[item];
+    if (!open || !(p.money >= price)) return;
+    if (item === "grenade") {
+      if (p.mag.grenade >= WEAPONS.grenade.mag) return;
+      p.mag.grenade++; p.owned.add("grenade");
+    } else {
+      if (p.owned.has(item)) return;
+      p.owned.add(item); p.mag[item] = WEAPONS[item].mag; p.res[item] = WEAPONS[item].reserve;
+      p.w = item; p.reloadUntil = 0;
+    }
+    p.money -= price;
+  }
+
+  /** A bot spends what it has (called while the round is being set up, just before the shop opens for people): usually the Kartonomiot, now and then the Paletówka or the Dalekomiot, then grenades. */
+  private botBuy(p: Player) {
+    const r = this.rand();
+    if (!p.owned.has("rifle") && !p.owned.has("sniper") && !p.owned.has("shotgun")) {
+      // the Dalekomiot only together with a Kartonomiot for close quarters
+      if (p.money >= PRICES.sniper + PRICES.rifle && r < 0.2) { this.buy(p, "sniper", true); this.buy(p, "rifle", true); }
+      else if (p.money >= PRICES.rifle) this.buy(p, "rifle", true);
+      else if (p.money >= PRICES.shotgun && r < 0.5) this.buy(p, "shotgun", true);
+    } else if (!p.owned.has("rifle") && p.money >= PRICES.rifle + 1000) this.buy(p, "rifle", true);
+    for (let k = 0; k < WEAPONS.grenade.mag && p.money >= PRICES.grenade + 1500; k++) this.buy(p, "grenade", true);
+  }
+
+  /** Back to the spawn for a new round. `keep`: the launchers survive (their owner did); otherwise only the Paczkownik. */
+  private respawn(p: Player, keep = false) {
     // the workers start in the west of the hall, the technicians at the docks in the east; each takes the next free
     // spawn of their side
     const mine = LAYOUTS[this.layout].teamSpawns?.[p.team] ?? SPAWNS.filter(([x]) => (p.team === 0 ? x < 0 : x > 0));
@@ -668,10 +708,14 @@ export class Sim {
     p.pitch = 0;
     this.leaveForklift(p, false);
     p.hp = 100; p.alive = true; p.killedBy = "";
-    p.owned = new Set<WeaponId>(["rifle", "pistol", "grenade"]);
-    p.w = "rifle";
-    p.mag = { rifle: WEAPONS.rifle.mag, pistol: WEAPONS.pistol.mag, shotgun: 0, grenade: WEAPONS.grenade.mag };
-    p.res = { rifle: WEAPONS.rifle.reserve, pistol: WEAPONS.pistol.reserve, shotgun: 0, grenade: 0 };
+    const nades = keep ? p.mag.grenade : 0;
+    if (!keep) p.owned = new Set<WeaponId>(["pistol"]);
+    p.owned.add("pistol");
+    // every launcher that is still owned starts the round full
+    for (const w of ["rifle", "pistol", "shotgun", "sniper"] as const) { p.mag[w] = p.owned.has(w) ? WEAPONS[w].mag : 0; p.res[w] = p.owned.has(w) ? WEAPONS[w].reserve : 0; }
+    p.mag.grenade = nades; p.res.grenade = 0;
+    if (nades) p.owned.add("grenade"); else p.owned.delete("grenade");
+    p.w = p.owned.has("rifle") ? "rifle" : p.owned.has("sniper") ? "sniper" : p.owned.has("shotgun") ? "shotgun" : "pistol";
     p.reloadUntil = 0; p.fireReady = this.time + 0.3;
     p.fallFrom = 0;
     p.spawn++; p.protectUntil = this.time + SPAWN_PROTECT_S; p.geoUntil = 0; p.histN = 0;
@@ -696,7 +740,7 @@ export class Sim {
     if (this.phase === "brief") { if (this.time >= this.phaseEnd) this.startRound(); return; }
     if (this.phase === "freeze") {
       if (this.time >= this.phaseEnd) {
-        this.phase = "play"; this.phaseEnd = this.time + (LAYOUTS[this.layout].roundS ?? ROUND_S);
+        this.phase = "play"; this.playStart = this.time; this.phaseEnd = this.time + (LAYOUTS[this.layout].roundS ?? ROUND_S);
         for (const p of this.players.values()) { p.protectUntil = this.time + SPAWN_PROTECT_S; p.lastStateT = this.time; }
       }
       return;
@@ -741,18 +785,8 @@ export class Sim {
       switch (pk.spot.kind) {
         case "med": if (p.hp < 100) { p.hp = Math.min(100, p.hp + 50); used = true; } break;
         case "ammo":
-          if (p.res.rifle < WEAPONS.rifle.reserve || p.mag.grenade < WEAPONS.grenade.mag || (p.owned.has("shotgun") && p.res.shotgun < WEAPONS.shotgun.reserve)) {
-            p.res.rifle = WEAPONS.rifle.reserve; p.mag.grenade = WEAPONS.grenade.mag;
-            if (p.owned.has("shotgun")) p.res.shotgun = WEAPONS.shotgun.reserve;
-            used = true;
-          }
-          break;
-        case "shotgun":
-          if (!p.owned.has("shotgun") || p.res.shotgun < WEAPONS.shotgun.reserve) {
-            if (!p.owned.has("shotgun")) p.mag.shotgun = WEAPONS.shotgun.mag;
-            p.owned.add("shotgun"); p.res.shotgun = WEAPONS.shotgun.reserve; used = true;
-            if (p.bot) { p.w = "shotgun"; p.reloadUntil = 0; }
-          }
+          // a refill for every launcher in hand (grenades are bought)
+          for (const w of ["rifle", "shotgun", "sniper"] as const) if (p.owned.has(w) && p.res[w] < WEAPONS[w].reserve) { p.res[w] = WEAPONS[w].reserve; used = true; }
           break;
         case "geo": p.geoUntil = this.time + GEO_S; used = true; break;
       }
@@ -840,7 +874,10 @@ export class Sim {
       if (p.w !== "grenade" && p.mag.grenade > 0 && d > 12 && d < 34 && this.time >= br.reactAt && this.rand() < 0.0012) { p.w = "grenade"; p.reloadUntil = 0; p.fireReady = Math.max(p.fireReady, this.time + 0.4); }
       const want: WeaponId = p.w === "grenade" && p.mag.grenade > 0 ? "grenade"
         : p.owned.has("shotgun") && p.mag.shotgun + p.res.shotgun > 0 && d < 11 ? "shotgun"
-        : p.mag.rifle + p.res.rifle > 0 ? "rifle" : "pistol";
+        : p.owned.has("sniper") && p.mag.sniper + p.res.sniper > 0 && d > 40 ? "sniper"
+        : p.owned.has("rifle") && p.mag.rifle + p.res.rifle > 0 ? "rifle"
+        : p.owned.has("sniper") && p.mag.sniper + p.res.sniper > 0 ? "sniper"
+        : p.owned.has("shotgun") && p.mag.shotgun + p.res.shotgun > 0 ? "shotgun" : "pistol";
       if (want !== p.w && !p.reloadUntil) { p.w = want; p.fireReady = Math.max(p.fireReady, this.time + 0.3); }
       if (this.time >= br.errUntil) {
         const e = cfg.aimErr * (1 + Math.min(1.5, d / 30));
@@ -992,6 +1029,7 @@ export class Sim {
       veh: me.veh, seat: me.seat, vrev: me.veh >= 0 ? this.forklifts[me.veh].rev : 0,
       reloading: !!me.reloadUntil,
       geo: Math.max(0, me.geoUntil - this.time), killedBy: me.killedBy, carry: me.carry,
+      money: me.money, buy: this.canBuy(me),
     };
     const obj: ObjSnap = {
       round: this.round, wins: [this.wins[0], this.wins[1]], swapped: this.swapped,
