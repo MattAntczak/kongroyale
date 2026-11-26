@@ -1,26 +1,30 @@
 # efectivo ARENA
 
-Drużynowa bitwa na kartony w magazynie efectivo: **Grupa A kontra Grupa B**. Gra działa w przeglądarce (three.js),
+Bitwa na kartony w magazynie: **pracownicy magazynu kontra technicy efectivo**. Gra działa w przeglądarce (three.js),
 a pokoje online obsługuje mały serwer Node.js z WebSocketami. Tryb z botami działa w całości w przeglądarce.
 
-- **Hala 240 × 130 m (31 200 m²) w normalnej skali:** 60 regałów wysokiego składowania, strefy Kompletacja,
-  Surowiec, Pakowanie, Strefa niebezpieczna i Wysyłka, 9 ramp, kotwice UWB.
-- **Regały snajperskie:** 8 z 60 regałów (po 4 na stronę każdej grupy) jest niższych, ma żółtą drabinę i pomost na
-  górze. Na mapie Live są niebieskie. Na pomoście nie ma osłony, skok z góry zabiera zdrowie (drabiną schodzi się
-  bezpiecznie), a trafiony bot namierza strzelca nawet z daleka. Na zwykłe regały wejść się nie da.
-- **Grupy:** Grupa A (niebieskie kamizelki) startuje od zachodu, Grupa B (pomarańczowe) od rampy wysyłkowej. Grupy
-  dopełniają się botami do pełnego składu (4 na 4, 6 na 6 albo 8 na 8). Nie ma ognia w swoich, a wygrywa grupa
-  z 40 eliminacjami albo z lepszym wynikiem po 8 minutach.
-- **Wyrzutnie kartonów:**
-  - Kartonomiot strzela seriami.
-  - Paczkownik rzuca pojedyncze paczki.
-  - Paletówka rzuca garść małych paczek naraz.
-
-  Każdy karton naprawdę leci i lekko opada. Zamiast wystrzału słychać piknięcie skanera kodów.
-- **Wózki widłowe dla dwóch osób (6 na hali):** pierwszy gracz, który naciśnie E, prowadzi. Drugi wskakuje na tylny podest i rzuca
-  kartonami. Karoseria osłania nogi, a rzucający stoi odsłonięty.
-- **Mapa Live w rogu ekranu:** pokazuje całą twoją grupę i wózki, a rywali tylko wtedy, gdy rzucają. Znajdźka
-  efectivo GEO pokazuje wszystkich przez 10 s.
+- **Dwie drużyny, do 20 na 20:**
+  - Pracownicy magazynu (pomarańczowe kamizelki) bronią hali.
+  - Technicy efectivo (niebieskie kamizelki) przyjeżdżają od ramp i wykonują misję.
+- **Dwie misje:**
+  - *Serwer lokalny:* pracownicy odłączyli serwer. Technicy muszą dojść do szafy i przytrzymać E przez 12 sekund.
+    Pracownicy wygrywają, gdy minie 7 minut.
+  - *Tagi zegarkowe:* technicy noszą skrzynki z tagami z dostawy przy rampie do stacji ładowania. Potrzeba pięciu
+    dostaw. Kto niesie tagi, jest stale widoczny na mapie Live. Upuszczoną skrzynkę pracownicy mogą przejąć.
+- **Odprawa zamiast ekranu ładowania:** przed każdą zmianą przewija się historia misji i zadanie twojej drużyny.
+- **Lobby ze slotami:** widać obie drużyny, wybierasz stronę i liczbę botów w każdej. Online zmianę ustawia i zaczyna
+  gospodarz, czyli pierwsza osoba w hali.
+- **Hala 240 × 130 m (31 200 m²) w trzech konfiguracjach,** losowanych przy każdej zmianie: klasyczna, z regałami
+  buforowymi na środku i lustrzana. Ścianki działowe dzielą środek hali na trzy trasy podejścia.
+- **Regały snajperskie:** kilka regałów w każdej konfiguracji jest niższych, ma żółtą drabinę i pomost na górze. Na
+  pomoście nie ma osłony, skok z góry zabiera zdrowie, a trafiony bot namierza strzelca nawet z daleka.
+- **Cztery sloty:** Kartonomiot (serie), Paczkownik (pojedyncze paczki), Paletówka (garść paczek, do znalezienia na
+  hali) i kartonowy granat (rzucany łukiem, razi rywali w promieniu 6,5 m). Kartony naprawdę lecą, a zamiast
+  wystrzału słychać piknięcie skanera kodów.
+- **Powroty falami:** wyeliminowani gracze wracają razem, pracownicy co 14 s, technicy co 9 s.
+- **Wózki widłowe dla dwóch osób (6 na hali):** pierwszy gracz, który naciśnie E, prowadzi. Drugi wskakuje na tylny
+  podest i rzuca. Karoseria osłania nogi, a rzucający stoi odsłonięty.
+- **Mapa Live:** pokazuje twoją drużynę, wózki i cel misji, a rywali tylko wtedy, gdy rzucają.
 - **Wygląd:** interfejs korzysta z design systemu aplikacji efectivo (`efectivo-admin-frontend`).
 
 ## Uruchomienie
@@ -37,11 +41,13 @@ Wersja produkcyjna: najpierw `npm run build`, potem `npm start`. To uruchamia se
 (ustawiasz go zmienną `EF_PORT`). Znajomi wchodzą do tej samej hali przez link z parametrem `?hala=KOD`.
 
 Testy: `npm test` uruchamia typecheck oraz test bez grafiki. Ten test sprawdza:
-- czy spawny i znajdźki są osiągalne,
-- czy grupy są wyrównane i nie ma ognia w swoich,
-- czy w 3-minutowym meczu botów padają eliminacje,
-- czy działa wsiadanie, jazda, odrzucanie teleportu i wysiadanie z wózka,
-- czy drabina wnosi gracza na pomost, bot zostaje na dole, a skok z pomostu zabiera zdrowie.
+- czy w każdej z trzech konfiguracji spawny, znajdźki i obiekty misji są osiągalne,
+- czy zmiany samych botów w obu misjach kończą się wynikiem i nie ma ognia w swoich,
+- zasady lobby (tylko gospodarz ustawia i zaczyna, najwyżej 20 osób w drużynie),
+- wózek widłowy, wejście na pomost, podłączanie serwera i granat.
+
+`npm run check:online` przechodzi lobby, odprawę i jazdę wózkiem we dwóch na prawdziwym serwerze.
+`npx tsx smoke.ts --balance` rozgrywa więcej zmian botów i pokazuje, kto wygrywa.
 
 ## Sterowanie
 
@@ -51,8 +57,8 @@ Testy: `npm test` uruchamia typecheck oraz test bez grafiki. Ten test sprawdza:
 | Mysz, LPM | Celowanie i rzut kartonem |
 | Shift, Spacja | Sprint, skok na niskie palety |
 | R | Przeładowanie |
-| 1 2 3 | Kartonomiot, Paczkownik, Paletówka |
-| E | Wózek widłowy: wsiądź, wskocz na podest, wysiądź |
+| 1 2 3 4 | Kartonomiot, Paczkownik, Paletówka, kartonowy granat |
+| E | Wózek widłowy: wsiądź, wskocz na podest, wysiądź. Przy serwerze przytrzymaj: podłączanie |
 | Tab | Tablica wyników |
 | T | Czat |
 | Esc | Pauza: czułość, głośność, pole widzenia |
@@ -62,7 +68,7 @@ Testy: `npm test` uruchamia typecheck oraz test bez grafiki. Ten test sprawdza:
 | Pliki | Co tam jest |
 |---|---|
 | `shared/` | Mapa, fizyka, wyrzutnie, wózki, nawigacja i boty, host meczu (`sim.ts`), wspólne dla przeglądarki i serwera |
-| `client/` | Render three.js, postacie, latające kartony, dźwięki (syntezowane), HUD i menu |
+| `client/` | Render three.js, postacie, latające kartony, dźwięki (syntezowane), HUD, lobby i odprawa (`story.ts`) |
 | `server.ts` | Pokoje WebSocket, 60 ticków/s, snapshoty 20/s |
 | `smoke.ts` | Test bez grafiki |
 

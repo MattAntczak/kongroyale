@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>efectivo ARENA</title>
-  <meta name="description" content="Drużynowa bitwa na kartony w magazynie efectivo: Grupa A kontra Grupa B, z botami albo ze znajomymi online." />
+  <meta name="description" content="Bitwa na kartony w magazynie: pracownicy bronią hali, technicy efectivo wykonują misję. Z botami albo ze znajomymi online." />
   <meta name="theme-color" content="#f8fafc" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -16,30 +16,44 @@
 
   <!-- in-game HUD -->
   <div id="hud" hidden>
+    <div class="hud-tl">
+      <div class="team" id="teamChip"></div>
+      <div class="vital"><b id="hp">100</b><div class="hpbar" id="hpbar"><i></i></div></div>
+      <div class="carry" id="carry" hidden>Niesiesz tagi zegarkowe · widać cię na mapie</div>
+    </div>
     <div class="hud-top" id="score"></div>
     <div id="toast"></div>
-    <div id="feed"></div>
+    <div class="hud-tr">
+      <div id="map"><canvas id="mapc" width="544" height="295"></canvas><div class="geo" id="geo" hidden>GEO</div></div>
+      <div id="feed"></div>
+    </div>
+    <div id="marker" hidden><i></i><span id="markerText"></span></div>
     <div id="cross"><i></i><i></i><i></i><i></i><span class="dot"></span></div>
     <div id="hitmark"><svg viewBox="0 0 26 26" width="26" height="26" fill="none" stroke="#f5f5f7" stroke-width="2" stroke-linecap="round"><path d="M3 3l6 6M23 3l-6 6M3 23l6-6M23 23l-6-6" /></svg></div>
     <div id="usePrompt" hidden><kbd>E</kbd><span id="usePromptText"></span></div>
     <div id="chat"></div>
     <input id="chatbox" class="field" maxlength="120" placeholder="Wiadomość do hali…" hidden />
-    <div id="map"><canvas id="mapc" width="544" height="295"></canvas><div class="geo" id="geo" hidden>GEO</div></div>
-    <div class="hud-br">
-      <div class="vital"><b id="hp">100</b><div class="hpbar" id="hpbar"><i></i></div></div>
-      <div class="ammo"><b id="mag">30</b><small id="res">/ 120</small><span id="wname">Kartonomiot</span></div>
-    </div>
+    <div class="slots" id="slots"></div>
     <div id="vignette"></div>
   </div>
 
-  <div id="death" hidden><div class="card"><p class="eyebrow"><span class="badge badge-gray">Wyeliminowany</span></p><h2 id="deathBy"></h2><p id="deathSub">Wracasz na halę za chwilę.</p><div class="count"><span class="badge badge-blue" id="deathCount">Powrót za 3 s</span></div></div></div>
+  <!-- the briefing: the loading screen tells the mission's story -->
+  <div id="brief" hidden>
+    <div class="crawl"><div class="crawl-text" id="crawlText"></div></div>
+    <div class="brief-foot">
+      <div class="role" id="briefRole"></div>
+      <div class="brief-meta"><span id="briefLayout"></span><span id="briefCount"></span></div>
+    </div>
+  </div>
+
+  <div id="death" hidden><div class="card"><p class="eyebrow"><span class="badge badge-gray">Wyeliminowany</span></p><h2 id="deathBy"></h2><p id="deathSub">Wracasz na halę z następną falą.</p><div class="count"><span class="badge badge-blue" id="deathCount">Powrót za 3 s</span></div></div></div>
 
   <div id="board" class="overlay" hidden><div class="card"><h3><span>Tablica zmiany</span><span id="boardRoom" class="badge badge-gray"></span></h3><table class="board" id="boardTable"></table></div></div>
 
   <div id="end" class="overlay" hidden><div class="card">
     <div class="endtop"><p class="eyebrow"><span class="badge badge-gray">Koniec zmiany</span></p><h2 id="endTitle">Zmiana zakończona</h2><p id="endSub" style="margin:0"></p></div>
     <table class="board" id="endTable"></table>
-    <div class="endfoot"><span class="badge badge-blue" id="endCount">Nowa zmiana za 10 s</span></div>
+    <div class="endfoot"><span class="badge badge-blue" id="endCount">Powrót do lobby za 10 s</span></div>
   </div></div>
 
   <div id="pause" class="overlay" hidden><div class="card">
@@ -53,47 +67,76 @@
     <div class="row"><button class="btn btn-ghost" id="quit">Wyjdź do menu</button><button class="btn btn-primary" id="resume">Wróć na halę</button></div>
   </div></div>
 
-  <!-- title: the efectivo app shell -->
+  <!-- title and lobby: the efectivo app shell -->
   <section id="title">
     <nav><div class="brand"><span class="wordmark">efectivo<small>ARENA</small></span></div><span class="live-pill" id="srvPill"><span class="dot"></span> LIVE</span></nav>
     <div class="page">
       <div class="page-header">
-        <h1>Nowa zmiana: Grupa A kontra Grupa B</h1>
-        <p>Bitwa na kartony w magazynie. Wygrywa grupa, która pierwsza zdobędzie 40 eliminacji.</p>
+        <h1>Pracownicy magazynu kontra technicy efectivo</h1>
+        <p>Technicy mają misję do wykonania, pracownicy bronią hali. Wybierz stronę, ustaw składy i zacznij zmianę.</p>
       </div>
-      <div class="grid2">
-        <div class="card">
-          <div class="card-head"><h2>Ustawienia gry</h2></div>
-          <div class="card-body setup">
-            <div class="row"><span class="label">Twoje imię</span><input class="field" id="nick" maxlength="16" placeholder="Magazynier" style="flex:1" /></div>
-            <div class="row" id="modeRow"><span class="label">Tryb</span><button class="chip" data-mode="bots" aria-pressed="true">Z botami</button><button class="chip" data-mode="online" aria-pressed="false">Online ze znajomymi</button></div>
-            <div class="row" id="teamRow"><span class="label">Twoja grupa</span><button class="chip" data-team="-1" aria-pressed="true">Dowolna</button><button class="chip" data-team="0" aria-pressed="false"><span class="swatch" style="background:var(--team-a)"></span>Grupa A</button><button class="chip" data-team="1" aria-pressed="false"><span class="swatch" style="background:var(--team-b)"></span>Grupa B</button></div>
-            <div class="row" id="diffRow"><span class="label">Poziom botów</span><button class="chip" data-diff="easy" aria-pressed="false">Łatwy</button><button class="chip" data-diff="normal" aria-pressed="true">Normalny</button><button class="chip" data-diff="hard" aria-pressed="false">Trudny</button></div>
-            <div class="row" id="countRow"><span class="label">Skład</span><button class="chip" data-count="8" aria-pressed="false">4 na 4</button><button class="chip" data-count="12" aria-pressed="true">6 na 6</button><button class="chip" data-count="16" aria-pressed="false">8 na 8</button></div>
-            <div class="row" id="roomRow" hidden><span class="label">Kod hali</span><input class="field mono" id="room" maxlength="8" placeholder="HALA" style="text-transform:uppercase;flex:1" /></div>
-            <div class="cta"><button class="btn btn-primary btn-lg" id="play">Wejdź na halę</button><button class="btn btn-ghost btn-lg" id="howBtn">Sterowanie</button></div>
-            <div class="status" id="status"></div>
+      <div class="card">
+        <div class="card-body setup-row">
+          <div class="row"><span class="label">Twoje imię</span><input class="field" id="nick" maxlength="16" placeholder="Magazynier" /></div>
+          <div class="row" id="modeRow"><span class="label">Tryb</span><button class="chip" data-mode="bots" aria-pressed="true">Z botami</button><button class="chip" data-mode="online" aria-pressed="false">Online ze znajomymi</button></div>
+          <div class="row" id="roomRow" hidden><span class="label">Kod hali</span><input class="field mono" id="room" maxlength="8" placeholder="HALA" style="text-transform:uppercase;width:120px" /><button class="btn btn-ghost" id="connect">Połącz</button></div>
+          <div class="status" id="status"></div>
+        </div>
+      </div>
+      <div id="lobby">
+        <div class="teams">
+          <div class="card team-card" data-team="0">
+            <div class="card-head"><h2><span class="swatch" style="background:var(--team-w)"></span>Pracownicy magazynu</h2><span class="badge badge-orange">Obrona</span></div>
+            <div class="card-body">
+              <p class="team-desc">Odłączyli system i nie chcą go z powrotem. Bronią serwera i stacji ładowania.</p>
+              <div class="slots-list" id="slots0"></div>
+              <div class="team-foot"><button class="btn btn-ghost join" data-join="0">Dołącz do pracowników</button><div class="stepper" data-bots="0"><span>Boty</span><button data-d="-1" aria-label="Mniej botów">−</button><b id="bots0">5</b><button data-d="1" aria-label="Więcej botów">+</button></div></div>
+            </div>
+          </div>
+          <div class="card team-card" data-team="1">
+            <div class="card-head"><h2><span class="swatch" style="background:var(--team-t)"></span>Technicy efectivo</h2><span class="badge badge-blue">Atak</span></div>
+            <div class="card-body">
+              <p class="team-desc">Przyjeżdżają od ramp. Mają podłączyć serwer lokalny albo dostarczyć tagi zegarkowe.</p>
+              <div class="slots-list" id="slots1"></div>
+              <div class="team-foot"><button class="btn btn-ghost join" data-join="1">Dołącz do techników</button><div class="stepper" data-bots="1"><span>Boty</span><button data-d="-1" aria-label="Mniej botów">−</button><b id="bots1">5</b><button data-d="1" aria-label="Więcej botów">+</button></div></div>
+            </div>
           </div>
         </div>
         <div class="card">
-          <div class="card-head"><h2>Mapa Live · Hala A · 31 200 m²</h2><span class="live-pill"><span class="dot"></span> LIVE</span></div>
-          <div class="card-body" style="padding-bottom:0"><div class="stage"><canvas id="preview"></canvas></div></div>
-          <div class="legend"><span class="badge badge-blue"><span class="swatch" style="background:var(--team-a)"></span>Grupa A</span><span class="badge badge-orange"><span class="swatch" style="background:var(--team-b)"></span>Grupa B</span><span class="sp"></span><span id="previewCap">Grupa A 0 : 0 Grupa B</span></div>
+          <div class="card-body setup-row">
+            <div class="row" id="missionRow"><span class="label">Misja</span><button class="chip" data-mission="random" aria-pressed="true">Losowa</button><button class="chip" data-mission="server" aria-pressed="false">Serwer lokalny</button><button class="chip" data-mission="tags" aria-pressed="false">Tagi zegarkowe</button></div>
+            <div class="row" id="diffRow"><span class="label">Poziom botów</span><button class="chip" data-diff="easy" aria-pressed="false">Łatwy</button><button class="chip" data-diff="normal" aria-pressed="true">Normalny</button><button class="chip" data-diff="hard" aria-pressed="false">Trudny</button></div>
+            <div class="row cta"><button class="btn btn-primary btn-lg" id="play">Zacznij zmianę</button><span class="hint" id="hostHint"></span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Co znajdziesz na hali</h2><span class="badge badge-gray">Hala ma 3 konfiguracje, losowane przy każdej zmianie</span></div>
+          <div class="card-body items">
+            <div><b>Kartonomiot <kbd>1</kbd></b>Rzuca kartonami seriami. Podstawowa wyrzutnia, 30 w magazynku.</div>
+            <div><b>Paczkownik <kbd>2</kbd></b>Pojedyncze, celne paczki. Nigdy się nie kończą.</div>
+            <div><b>Paletówka <kbd>3</kbd></b>Garść paczek naraz, mocna z bliska. Trzeba ją znaleźć na hali.</div>
+            <div><b>Kartonowy granat <kbd>4</kbd></b>Rzucany łukiem, rozsypuje się i razi rywali w promieniu 6 m. Masz dwa.</div>
+            <div><b>Apteczka</b>Białe pudełko z zielonym krzyżem. Dodaje 50 zdrowia.</div>
+            <div><b>Zapas paczek</b>Stos złożonych kartonów. Uzupełnia amunicję i granaty.</div>
+            <div><b>efectivo GEO</b>Czarny tag z niebieskim pierścieniem. Przez 10 s widzisz wszystkich na mapie.</div>
+            <div><b>Wózek widłowy <kbd>E</kbd></b>Pierwsza osoba prowadzi, druga rzuca z podestu. Karoseria osłania nogi.</div>
+            <div><b>Regał z żółtą drabiną <kbd>W</kbd></b>Wejście na pomost snajperski. Bez osłony, a skok w dół boli.</div>
+            <div><b>Mapa Live</b>Widzisz swoją drużynę zawsze, rywali gdy rzucają, a niosących tagi cały czas.</div>
+          </div>
         </div>
       </div>
-      <div class="card" id="how" hidden>
+      <div class="card" id="how">
         <div class="card-head"><h2>Sterowanie</h2><span class="badge badge-gray">Kliknij w obraz, żeby przejąć kursor · Esc to pauza</span></div>
         <div class="card-body keys">
           <div><kbd>W A S D</kbd>Ruch</div>
           <div><kbd>Mysz</kbd>Rozglądanie się i celowanie</div>
-          <div><kbd>LPM</kbd>Rzut kartonem</div>
+          <div><kbd>LPM</kbd>Rzut</div>
           <div><kbd>Shift</kbd>Sprint</div>
           <div><kbd>Spacja</kbd>Skok na niskie palety</div>
-          <div><kbd>W</kbd>przy żółtej drabinie: wejście na regał z pomostem</div>
           <div><kbd>R</kbd>Przeładowanie</div>
-          <div><kbd>1 2 3</kbd>Kartonomiot, Paczkownik, Paletówka</div>
+          <div><kbd>1 2 3 4</kbd>Wyrzutnie i granat</div>
+          <div><kbd>E</kbd>Wózek widłowy, a przy serwerze przytrzymaj: podłączanie</div>
           <div><kbd>Tab</kbd>Tablica wyników</div>
-          <div><kbd>E</kbd>Wózek widłowy: wsiądź, wskocz na podest, wysiądź</div>
           <div><kbd>T</kbd>Czat</div>
         </div>
       </div>

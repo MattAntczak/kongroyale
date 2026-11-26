@@ -46,6 +46,7 @@ const BEEP = {
   rifle: { f: 2750, d: 0.055, n: 1 },
   pistol: { f: 3150, d: 0.08, n: 1 },
   shotgun: { f: 2250, d: 0.06, n: 2 },
+  grenade: { f: 1500, d: 0.11, n: 1 },
 } as const;
 
 function beep(t: number, f: number, dur: number, gain: number, muffled: boolean) {
@@ -67,6 +68,22 @@ export function shot(w: WeaponId, dist = 0) {
   const t = ctx.currentTime;
   for (let i = 0; i < b.n; i++) beep(t + i * (b.d + 0.035), b.f, b.d, 0.16 * att, dist > 25);
   noise(t, 0.07, 260, 0.9, 0.35 * att, "lowpass", 0.07);
+}
+
+/** A cardboard grenade bursting: a soft thump and a rustle of scraps. */
+export function boom(dist = 0) {
+  if (!ctx) return;
+  const att = 1 / (1 + dist * 0.05), t = ctx.currentTime;
+  noise(t, 0.35, 140, 0.7, 1.1 * att, "lowpass", 0.35);
+  noise(t + 0.03, 0.5, 2200, 0.6, 0.3 * att, "bandpass", 0.5);
+  tone(t, 110, 45, 0.3, 0.6 * att, "sine");
+}
+
+/** The alarm when the server is being reconnected, or a delivery lands. */
+export function alert() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  for (let i = 0; i < 3; i++) tone(t + i * 0.16, 1320, 1320, 0.1, 0.12, "square");
 }
 
 /** The forklift's reversing beep. */

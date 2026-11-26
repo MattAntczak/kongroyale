@@ -4,9 +4,9 @@
 import * as THREE from "three";
 import type { WeaponId } from "../shared/weapons";
 
-/** Vest colours: Grupa A wears efectivo blue, Grupa B hi-vis orange. */
-export const TEAM_COLORS = [0x474fff, 0xff6a00] as const;
-export const TEAM_CSS = ["#474fff", "#ff6a00"] as const;
+/** Vest colours: the warehouse workers wear hi-vis orange, the efectivo technicians efectivo blue. */
+export const TEAM_COLORS = [0xff6a00, 0x474fff] as const;
+export const TEAM_CSS = ["#ff6a00", "#474fff"] as const;
 const SKIN = [0xf1c7a5, 0xd9a47c, 0xa8724f, 0xe8b996, 0x8a5a3c];
 
 const box = (sx: number, sy: number, sz: number, mat: THREE.Material, x = 0, y = 0, z = 0) => {
@@ -42,6 +42,10 @@ export function gunModel(w: WeaponId, mat: THREE.Material = cardboard): THREE.Gr
     g.add(box(0.085, 0.025, 0.225, tape, 0, 0.03, -0.05));
     g.add(box(0.06, 0.13, 0.07, mat, 0, -0.09, 0.03));
     g.add(box(0.04, 0.02, 0.005, scanGlass, 0, 0.02, 0.062));
+  } else if (w === "grenade") {
+    g.add(box(0.2, 0.16, 0.2, mat, 0, -0.02, -0.12));          // a taped parcel, held ready to throw
+    g.add(box(0.205, 0.03, 0.205, tape, 0, -0.02, -0.12));
+    g.add(box(0.03, 0.165, 0.205, tape, 0, -0.02, -0.12));
   } else {
     g.add(box(0.2, 0.15, 0.5, mat, 0, 0, -0.12));             // a wide box: the pallet launcher
     g.add(box(0.205, 0.035, 0.51, tape, 0, 0.0, -0.12));
@@ -62,6 +66,7 @@ export class Human {
   private gunId: WeaponId | null = null;
   private phase = 0;
   private fall = 0;
+  private caseMesh: THREE.Mesh | null = null;
   private label: THREE.Sprite;
   private lastX = 0; private lastZ = 0; private speed = 0;
 
@@ -70,7 +75,8 @@ export class Human {
     const vest = TEAM_COLORS[team & 1];
     const vestMat = new THREE.MeshStandardMaterial({ color: vest, roughness: 0.6, emissive: vest, emissiveIntensity: 0.15 });
     const skin = new THREE.MeshStandardMaterial({ color: SKIN[(colorIdx * 7 + name.length) % SKIN.length], roughness: 0.7 });
-    const hatMat = new THREE.MeshStandardMaterial({ color: bot ? 0xf5f5f7 : 0xffd400, roughness: 0.35 });
+    const hatMat = new THREE.MeshStandardMaterial({ color: team === 0 ? 0xffd400 : 0xf5f5f7, roughness: 0.35 });
+    void bot;
 
     this.root.add(this.hips);
     this.hips.position.y = 0.92;
@@ -111,12 +117,22 @@ export class Human {
     const g = c.getContext("2d")!;
     g.font = "500 30px Inter, -apple-system, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
     const tw = Math.min(250, g.measureText(name).width + 40);
-    g.fillStyle = ally ? (team ? "#ff6a00" : "#474fff") : "#ffffff"; g.beginPath(); g.roundRect((256 - tw) / 2, 8, tw, 48, 12); g.fill();
+    g.fillStyle = ally ? TEAM_CSS[team & 1] : "#ffffff"; g.beginPath(); g.roundRect((256 - tw) / 2, 8, tw, 48, 12); g.fill();
     g.fillStyle = ally ? "#ffffff" : "#1e293b"; g.fillText(name, 128, 33);
     const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
     this.label = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false, transparent: true }));
     this.label.scale.set(1.0, 0.25, 1); this.label.position.y = 2.15;
     this.root.add(this.label);
+  }
+
+  /** A case of watch tags on the back, while this player carries one. */
+  setCarry(on: boolean) {
+    if (on && !this.caseMesh) {
+      this.caseMesh = box(0.34, 0.26, 0.16, new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.3, metalness: 0.5 }), 0, 0.34, 0.2);
+      const led = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.03, 0.01), new THREE.MeshBasicMaterial({ color: 0x474fff })); led.position.set(0, 0.02, 0.085); this.caseMesh.add(led);
+      this.upper.add(this.caseMesh);
+    }
+    if (this.caseMesh) this.caseMesh.visible = on;
   }
 
   setWeapon(w: WeaponId) {

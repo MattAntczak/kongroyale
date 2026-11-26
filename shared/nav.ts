@@ -1,31 +1,39 @@
 // Floor navigation for bots: a 1 m occupancy grid over the hall, A* with 8-way moves and string-pulling so paths
 // cut corners instead of zig-zagging cell to cell.
 
-import { BOXES, HALL } from "./map";
+import { HALL, LAYOUT, LAYOUTS } from "./map";
 
 export const CELL = 1;
 const CLEAR = 0.5; // how far a bot keeps its centre from any obstacle
 export const GW = Math.round((HALL.x1 - HALL.x0) / CELL);
 export const GH = Math.round((HALL.z1 - HALL.z0) / CELL);
-const solid = new Uint8Array(GW * GH);
 
-for (let j = 0; j < GH; j++) {
-  for (let i = 0; i < GW; i++) {
-    const x = HALL.x0 + (i + 0.5) * CELL, z = HALL.z0 + (j + 0.5) * CELL;
-    let s = x - HALL.x0 < CLEAR || HALL.x1 - x < CLEAR || z - HALL.z0 < CLEAR || HALL.z1 - z < CLEAR ? 1 : 0;
-    if (!s) for (const b of BOXES) {
-      if (b.y0 > 1.8) continue;
-      if (x > b.x0 - CLEAR && x < b.x1 + CLEAR && z > b.z0 - CLEAR && z < b.z1 + CLEAR) { s = 1; break; }
+// one grid per hall configuration, built the first time that configuration is used
+const grids: (Uint8Array | undefined)[] = [];
+function grid(): Uint8Array {
+  let g = grids[LAYOUT];
+  if (g) return g;
+  g = grids[LAYOUT] = new Uint8Array(GW * GH);
+  const boxes = LAYOUTS[LAYOUT].boxes;
+  for (let j = 0; j < GH; j++) {
+    for (let i = 0; i < GW; i++) {
+      const x = HALL.x0 + (i + 0.5) * CELL, z = HALL.z0 + (j + 0.5) * CELL;
+      let s = x - HALL.x0 < CLEAR || HALL.x1 - x < CLEAR || z - HALL.z0 < CLEAR || HALL.z1 - z < CLEAR ? 1 : 0;
+      if (!s) for (const b of boxes) {
+        if (b.y0 > 1.8) continue;
+        if (x > b.x0 - CLEAR && x < b.x1 + CLEAR && z > b.z0 - CLEAR && z < b.z1 + CLEAR) { s = 1; break; }
+      }
+      g[j * GW + i] = s;
     }
-    solid[j * GW + i] = s;
   }
+  return g;
 }
 
 export const cellOf = (x: number, z: number): [number, number] => [
   Math.max(0, Math.min(GW - 1, Math.floor((x - HALL.x0) / CELL))),
   Math.max(0, Math.min(GH - 1, Math.floor((z - HALL.z0) / CELL))),
 ];
-export const isFree = (i: number, j: number) => i >= 0 && j >= 0 && i < GW && j < GH && solid[j * GW + i] === 0;
+export const isFree = (i: number, j: number) => i >= 0 && j >= 0 && i < GW && j < GH && grid()[j * GW + i] === 0;
 export const freeAt = (x: number, z: number) => { const [i, j] = cellOf(x, z); return isFree(i, j); };
 const centre = (i: number, j: number): [number, number] => [HALL.x0 + (i + 0.5) * CELL, HALL.z0 + (j + 0.5) * CELL];
 

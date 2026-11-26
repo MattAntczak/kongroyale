@@ -1,7 +1,7 @@
-// efectivo ARENA game server: rooms over WebSocket, each running one Sim at 60 ticks a second and sending snapshots at
-// 20 a second. With EF_SERVE=1 it also serves the built client from dist on the same port.
+// efectivo ARENA game server: rooms over WebSocket, each running one Sim (lobby, briefing, shift) at 60 ticks a
+// second and sending snapshots at 20 a second. With EF_SERVE=1 it also serves the built client from dist on the same port.
 //
-//   npm run server            (port 3030, rooms filled with bots)
+//   npm run server            (port 3030)
 //   EF_PORT=8080 npm start    (also serves the built client from dist/)
 
 import http from "node:http";
@@ -9,8 +9,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import { Sim, TEAM_FRAG_LIMIT, TICK_HZ } from "./shared/sim";
-import type { ClientMsg, Difficulty, HostMsg } from "./shared/proto";
+import { Sim, TICK_HZ } from "./shared/sim";
+import type { ClientMsg, HostMsg } from "./shared/proto";
 
 const PORT = Number(process.env.EF_PORT || 3030);
 const SERVE = process.env.EF_SERVE === "1";
@@ -24,9 +24,9 @@ interface Room { code: string; sim: Sim; clients: Set<Client>; tick: number; acc
 
 const rooms = new Map<string, Room>();
 
-function makeRoom(code: string, difficulty: Difficulty): Room {
+function makeRoom(code: string): Room {
   const room: Room = {
-    code, sim: new Sim({ bots: true, difficulty, seed: Math.floor(Math.random() * 2 ** 31) }), clients: new Set(), tick: 0, acc: 0,
+    code, sim: new Sim({ seed: Math.floor(Math.random() * 2 ** 31) }), clients: new Set(), tick: 0, acc: 0,
     last: performance.now(), timer: setInterval(() => runRoom(room), 4),
   };
   rooms.set(code, room);
@@ -85,17 +85,16 @@ wss.on("connection", (ws) => {
     if (!client) {
       if (m.t !== "join") return;
       const code = String(m.room || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8) || "HALA";
-      const diff: Difficulty = "normal";
       let room = rooms.get(code);
       if (!room) {
         if (rooms.size >= MAX_ROOMS) { send(ws, { t: "error", text: "Serwer jest pełny." }); ws.close(); return; }
-        room = makeRoom(code, diff);
+        room = makeRoom(code);
       }
       const id = room.sim.addHuman(String(m.name || ""), Number(m.team) === 0 || Number(m.team) === 1 ? Number(m.team) : -1);
-      if (!id) { send(ws, { t: "error", text: "Pokój jest pełny." }); ws.close(); return; }
+      if (!id) { send(ws, { t: "error", text: "Obie drużyny są pełne." }); ws.close(); return; }
       client = { ws, id, room, msgs: 0, window: Date.now() };
       room.clients.add(client);
-      send(ws, { t: "welcome", id, room: code, fragLimit: TEAM_FRAG_LIMIT });
+      send(ws, { t: "welcome", id, room: code });
       return;
     }
     const now = Date.now();

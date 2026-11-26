@@ -1,140 +1,179 @@
-// efectivo ARENA entry: the title page (mode, group, bots, room code), the live preview of the hall drawn like the efectivo
-// Live dashboard, and starting / leaving a Game.
+// efectivo ARENA entry: the title page with the lobby (both teams and their slots, bots per team, the mission), and
+// starting / leaving a Game. A game with bots is a room of our own inside the page; an online room is the same lobby
+// fed by the server, where the first person in runs it.
 
 import { Game } from "./game";
-import { LocalLink, WsLink } from "./net";
+import { LocalLink, WsLink, type Link } from "./net";
 import { initAudio } from "./audio";
-import { Sim } from "../shared/sim";
-import { BOXES, HALL, ZONES } from "../shared/map";
+import { MAX_TEAM } from "../shared/sim";
 import { findPath } from "../shared/nav";
-import { TEAM_CSS } from "./human";
-import type { Difficulty } from "../shared/proto";
+import type { Config, HostMsg } from "../shared/proto";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+type Snap = Extract<HostMsg, { t: "snap" }>;
 
 let mode: "bots" | "online" = "bots";
-let diff: Difficulty = "normal";
-let count = 12;
-let team = -1;
+let link: Link | null = null;
+let myId = 0;
+let room = "";
 let game: Game | null = null;
+let lobby: Snap | null = null;
+/** What we want the shift to be; sent to the host whenever we are it. */
+let want: Config = { bots: [5, 5], mission: "random", difficulty: "normal" };
 
 const store = {
   get(k: string) { try { return localStorage.getItem(k) ?? ""; } catch { return ""; } },
   set(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
 };
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+const myName = () => $<HTMLInputElement>("nick").value.trim() || "Magazynier";
+const isHost = () => !!lobby && lobby.host === myId;
 
-function chips(rowId: string, attr: string, pick: (v: string) => void) {
-  const row = $(rowId);
-  row.addEventListener("click", (e) => {
-    const b = (e.target as HTMLElement).closest<HTMLButtonElement>(`button[data-${attr}]`);
-    if (!b) return;
-    for (const c of row.querySelectorAll<HTMLButtonElement>(`button[data-${attr}]`)) c.setAttribute("aria-pressed", String(c === b));
-    pick(b.dataset[attr]!);
-  });
+// ------------------------------------------------------------------ the link and its messages
+
+function open(next: Link) {
+  link?.close();
+  link = next; myId = 0; lobby = null;
+  next.onMessage = onMessage;
+  next.onClose = (reason) => { if (link !== next) return; closeGame(); $("status").textContent = reason; if (mode === "online") { link = null; lobby = null; renderLobby(); } };
+  renderLobby();
 }
 
-function syncMode() {
-  $("diffRow").hidden = mode !== "bots";
-  $("countRow").hidden = mode !== "bots";
-  $("roomRow").hidden = mode !== "online";
-  $("play").textContent = mode === "bots" ? "Wejdź na halę" : "Dołącz do hali";
-  $("status").textContent = "";
-}
+function openLocal() { open(new LocalLink(myName(), 1)); }
 
-chips("modeRow", "mode", (v) => { mode = v as typeof mode; syncMode(); });
-chips("diffRow", "diff", (v) => { diff = v as Difficulty; });
-chips("countRow", "count", (v) => { count = Number(v); });
-chips("teamRow", "team", (v) => { team = Number(v); });
-$<HTMLInputElement>("nick").value = store.get("efectivo.nick");
-$<HTMLInputElement>("room").value = new URLSearchParams(location.search).get("hala") ?? store.get("efectivo.room");
-if (new URLSearchParams(location.search).has("hala")) {
-  mode = "online";
-  for (const c of $("modeRow").querySelectorAll<HTMLButtonElement>("button")) c.setAttribute("aria-pressed", String(c.dataset.mode === "online"));
-}
-syncMode();
-$("howBtn").addEventListener("click", () => { const how = $("how"); how.hidden = !how.hidden; if (!how.hidden) how.scrollIntoView({ behavior: "smooth" }); });
-
-$("play").addEventListener("click", () => {
-  initAudio();
-  const name = $<HTMLInputElement>("nick").value.trim() || "Magazynier";
-  store.set("efectivo.nick", name);
-  let link;
-  if (mode === "bots") link = new LocalLink(name, diff, count, team);
-  else {
-    const room = ($<HTMLInputElement>("room").value.trim().toUpperCase() || "HALA").replace(/[^A-Z0-9]/g, "").slice(0, 8) || "HALA";
-    store.set("efectivo.room", room);
-    history.replaceState(null, "", `?hala=${room}`);
-    link = new WsLink(name, room, team);
+function onMessage(m: HostMsg) {
+  if (m.t === "welcome") { myId = m.id; room = m.room; return; }
+  if (m.t === "error") { $("status").textContent = m.text; return; }
+  if (m.t === "snap") {
+    if (m.phase === "lobby") {
+      if (game) closeGame();
+      const first = !lobby;
+      lobby = m;
+      if (first && isHost()) link!.send({ t: "config", config: want });
+      renderLobby();
+      return;
+    }
+    if (!game && link) startGame(m);
   }
-  stopPreview();
+  game?.handle(m);
+  if (m.t === "ev" && m.evs.some((e) => e.k === "lobby")) closeGame();
+}
+
+function startGame(first: Snap) {
   $("title").hidden = true;
-  game = new Game(link, (msg) => {
-    game = null;
+  game = new Game(link!, myId, room, first, (msg) => {
+    // left through the pause menu: the room is gone with it
+    game = null; link = null; lobby = null;
     $("title").hidden = false;
     $("status").textContent = msg ?? "";
-    startPreview();
+    if (mode === "bots") openLocal(); else renderLobby();
   });
-  // the first click already counts as the gesture for pointer lock
+}
+
+function closeGame() {
+  if (!game) return;
+  game.dispose();
+  game = null;
+  $("title").hidden = false;
+}
+
+// ------------------------------------------------------------------ the lobby
+
+function renderLobby() {
+  const on = !!lobby;
+  $("lobby").hidden = !on;
+  if (!lobby) return;
+  const host = isHost();
+  const cfg = host ? want : lobby.config;
+  for (const t of [0, 1]) {
+    const people = lobby.players.filter((p) => !p.bot && p.tm === t);
+    const bots = Math.min(cfg.bots[t], MAX_TEAM - people.length);
+    const rows = people.map((p) => `<div class="slot ${p.id === myId ? "me" : ""}"><span>${esc(p.n)}</span>${p.id === myId ? '<i class="badge badge-blue">Ty</i>' : ""}${p.id === lobby!.host ? '<i class="badge badge-gray">gospodarz</i>' : ""}</div>`);
+    for (let i = 0; i < bots; i++) rows.push(`<div class="slot bot"><span>Bot ${i + 1}</span><i class="badge badge-gray">BOT</i></div>`);
+    $("slots" + t).innerHTML = rows.join("") + `<div class="slot-count">${people.length + bots} / ${MAX_TEAM} miejsc</div>`;
+    $("bots" + t).textContent = String(cfg.bots[t]);
+    const mine = lobby.players.find((p) => p.id === myId)?.tm === t;
+    const join = document.querySelector<HTMLButtonElement>(`button[data-join="${t}"]`)!;
+    join.disabled = mine; join.textContent = mine ? "Jesteś w tej drużynie" : t === 0 ? "Dołącz do pracowników" : "Dołącz do techników";
+    document.querySelector<HTMLElement>(`.team-card[data-team="${t}"]`)!.classList.toggle("mine", mine);
+  }
+  for (const b of document.querySelectorAll<HTMLButtonElement>("#missionRow button")) { b.setAttribute("aria-pressed", String(b.dataset.mission === cfg.mission)); b.disabled = !host; }
+  for (const b of document.querySelectorAll<HTMLButtonElement>("#diffRow button")) { b.setAttribute("aria-pressed", String(b.dataset.diff === cfg.difficulty)); b.disabled = !host; }
+  for (const b of document.querySelectorAll<HTMLButtonElement>(".stepper button")) b.disabled = !host;
+  $<HTMLButtonElement>("play").disabled = !host;
+  const hostName = lobby.players.find((p) => p.id === lobby!.host)?.n ?? "";
+  $("hostHint").textContent = host ? (mode === "online" ? `Hala ${room}: znajomi wchodzą przez ten sam kod` : "") : `Zmianę zaczyna gospodarz: ${hostName}`;
+}
+
+function setConfig(change: (c: Config) => void) {
+  if (!isHost() || !link) return;
+  change(want);
+  link.send({ t: "config", config: want });
+  renderLobby();
+}
+
+document.addEventListener("click", (e) => {
+  const el = e.target as HTMLElement;
+  const join = el.closest<HTMLButtonElement>("button[data-join]");
+  if (join && link) { link.send({ t: "team", team: Number(join.dataset.join) }); return; }
+  const step = el.closest<HTMLButtonElement>(".stepper button");
+  if (step) {
+    const t = Number(step.parentElement!.dataset.bots), d = Number(step.dataset.d);
+    setConfig((c) => { c.bots[t] = Math.max(0, Math.min(MAX_TEAM, c.bots[t] + d)); });
+    return;
+  }
+  const mission = el.closest<HTMLButtonElement>("#missionRow button");
+  if (mission) { setConfig((c) => { c.mission = mission.dataset.mission as Config["mission"]; }); return; }
+  const diff = el.closest<HTMLButtonElement>("#diffRow button");
+  if (diff) { setConfig((c) => { c.difficulty = diff.dataset.diff as Config["difficulty"]; }); return; }
+  const m = el.closest<HTMLButtonElement>("#modeRow button");
+  if (m) {
+    mode = m.dataset.mode as typeof mode;
+    for (const c of document.querySelectorAll<HTMLButtonElement>("#modeRow button")) c.setAttribute("aria-pressed", String(c === m));
+    $("roomRow").hidden = mode !== "online";
+    $("status").textContent = "";
+    if (mode === "bots") openLocal(); else { link?.close(); link = null; lobby = null; renderLobby(); }
+  }
+});
+
+$("connect").addEventListener("click", () => {
+  const code = ($<HTMLInputElement>("room").value.trim().toUpperCase() || "HALA").replace(/[^A-Z0-9]/g, "").slice(0, 8) || "HALA";
+  store.set("efectivo.room", code);
+  store.set("efectivo.nick", myName());
+  history.replaceState(null, "", `?hala=${code}`);
+  $("status").textContent = "";
+  open(new WsLink(myName(), code, -1));
+});
+
+$("play").addEventListener("click", () => {
+  if (!link || !isHost()) return;
+  initAudio();
+  store.set("efectivo.nick", myName());
+  link.send({ t: "config", config: want });
+  link.send({ t: "start" });
+  // this click also counts as the gesture for pointer lock
   void $<HTMLCanvasElement>("view").requestPointerLock()?.catch?.(() => {});
 });
+
+// a new name means a new seat in our own room
+$("nick").addEventListener("change", () => { store.set("efectivo.nick", myName()); if (mode === "bots" && !game) openLocal(); });
+
+// ------------------------------------------------------------------ start-up
+
+$<HTMLInputElement>("nick").value = store.get("efectivo.nick");
+const invited = new URLSearchParams(location.search).get("hala");
+$<HTMLInputElement>("room").value = invited ?? store.get("efectivo.room");
+if (invited) {
+  mode = "online";
+  for (const c of document.querySelectorAll<HTMLButtonElement>("#modeRow button")) c.setAttribute("aria-pressed", String(c.dataset.mode === "online"));
+  $("roomRow").hidden = false;
+  renderLobby();
+} else openLocal();
 
 // is the online server up?
 fetch("/efectivo/health").then((r) => r.ok ? r.json() : Promise.reject()).then((h: { rooms: number; players: number }) => {
   $("srvPill").innerHTML = `<span class="dot"></span> Serwer online · ${h.players} graczy`;
-}).catch(() => { $("srvPill").innerHTML = `<span class="dot"></span> Trening z botami`; });
+}).catch(() => { $("srvPill").innerHTML = `<span class="dot"></span> Gra z botami`; });
 
-// ------------------------------------------------------------------ title preview: a bot match on the Live map
-
-let previewRaf = 0;
-let previewSim: Sim | null = null;
-
-function startPreview() {
-  const canvas = $<HTMLCanvasElement>("preview");
-  const dpr = Math.min(2, window.devicePixelRatio);
-  const g = canvas.getContext("2d")!;
-  previewSim = new Sim({ bots: true, difficulty: "normal", seed: 7, maxPlayers: 12 });
-  const trails = new Map<number, [number, number][]>();
-  let last = performance.now(), acc = 0;
-  const loop = (t: number) => {
-    previewRaf = requestAnimationFrame(loop);
-    const w = canvas.clientWidth, h = canvas.clientHeight;
-    if (canvas.width !== Math.round(w * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
-    acc += Math.min(0.1, (t - last) / 1000); last = t;
-    while (acc >= 1 / 30) { acc -= 1 / 30; previewSim!.step(1 / 30); previewSim!.drainEvents(); }
-    const snap = previewSim!.snapshot(1);
-    if (!snap || snap.t !== "snap") return;
-    const W = canvas.width, H = canvas.height;
-    const pad = 28 * dpr;
-    const s = Math.min((W - pad * 2) / (HALL.x1 - HALL.x0), (H - pad * 2 - 30 * dpr) / (HALL.z1 - HALL.z0));
-    const ox = (W - s * (HALL.x1 - HALL.x0)) / 2, oz = (H - s * (HALL.z1 - HALL.z0)) / 2 + 6 * dpr;
-    const X = (x: number) => ox + (x - HALL.x0) * s, Z = (z: number) => oz + (z - HALL.z0) * s;
-    g.fillStyle = "#f8fafc"; g.fillRect(0, 0, W, H);
-    g.fillStyle = "#ffffff"; g.strokeStyle = "#e2e8f0"; g.lineWidth = dpr; g.beginPath(); g.roundRect(X(HALL.x0), Z(HALL.z0), (HALL.x1 - HALL.x0) * s, (HALL.z1 - HALL.z0) * s, 8 * dpr); g.fill(); g.stroke();
-    for (const zn of ZONES) { g.fillStyle = zn.color + "14"; g.fillRect(X(zn.x0), Z(zn.z0), (zn.x1 - zn.x0) * s, (zn.z1 - zn.z0) * s); }
-    for (const b of BOXES) {
-      if (b.kind === "wall") continue;
-      g.fillStyle = b.climb ? "#474fff" : b.kind === "rack" ? "#cbd5e1" : "#e2e8f0";
-      g.fillRect(X(b.x0), Z(b.z0), (b.x1 - b.x0) * s, (b.z1 - b.z0) * s);
-    }
-    for (const p of snap.players) {
-      let tr = trails.get(p.id);
-      if (!tr) { tr = []; trails.set(p.id, tr); }
-      if (!p.alive) { tr.length = 0; continue; }
-      const lastPt = tr[tr.length - 1];
-      if (!lastPt || Math.hypot(lastPt[0] - p.x, lastPt[1] - p.z) > 0.4) { tr.push([p.x, p.z]); if (tr.length > 40) tr.shift(); }
-      const col = TEAM_CSS[p.tm & 1];
-      g.strokeStyle = col + "66"; g.lineWidth = 1.5 * dpr; g.beginPath();
-      tr.forEach(([x, z], i) => i ? g.lineTo(X(x), Z(z)) : g.moveTo(X(x), Z(z))); g.stroke();
-      if (p.fired < 0.3) { g.fillStyle = col + "33"; g.beginPath(); g.arc(X(p.x), Z(p.z), 10 * dpr, 0, Math.PI * 2); g.fill(); }
-      g.fillStyle = col; g.strokeStyle = "#fff"; g.lineWidth = 1.5 * dpr; g.beginPath(); g.arc(X(p.x), Z(p.z), 4 * dpr, 0, Math.PI * 2); g.fill(); g.stroke();
-    }
-    $("previewCap").textContent = `Grupa A ${snap.score[0]} : ${snap.score[1]} Grupa B`;
-  };
-  previewRaf = requestAnimationFrame(loop);
-}
-
-function stopPreview() { cancelAnimationFrame(previewRaf); previewSim = null; }
-
-startPreview();
 // a handle for scripted checks (tools drive the game through it)
-(window as unknown as { __ef: unknown }).__ef = { get game() { return game; }, findPath };
+(window as unknown as { __ef: unknown }).__ef = { get game() { return game; }, get link() { return link; }, findPath };

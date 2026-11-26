@@ -5,7 +5,7 @@
 // speed and gravity, so a box drawn here lands where the host's box lands.
 
 import * as THREE from "three";
-import { BOX_GRAVITY, BOX_LIFE_S, WEAPONS, type WeaponId } from "../shared/weapons";
+import { BOX_GRAVITY, BOX_LIFE_S, GRENADE_FUSE_S, GRENADE_GRAVITY, WEAPONS, type WeaponId } from "../shared/weapons";
 import { cardboardTexture } from "./world";
 
 const MAX_BOXES = 320;
@@ -24,6 +24,7 @@ export class Fx {
   private bage = new Float32Array(MAX_BOXES).fill(-1);
   private bteam = new Int8Array(MAX_BOXES);
   private bowner = new Int32Array(MAX_BOXES);
+  private bnade = new Uint8Array(MAX_BOXES);
   private bnext = 0;
   private bitGeo = new THREE.BufferGeometry();
   private bitPos = new Float32Array(MAX_BITS * 3);
@@ -72,7 +73,7 @@ export class Fx {
     this.bx[i * 3] = x; this.bx[i * 3 + 1] = y; this.bx[i * 3 + 2] = z;
     this.bv[i * 3] = dx * def.speed; this.bv[i * 3 + 1] = dy * def.speed; this.bv[i * 3 + 2] = dz * def.speed;
     for (let k = 0; k < 3; k++) { this.brot[i * 3 + k] = Math.random() * 6.28; this.bspin[i * 3 + k] = (Math.random() - 0.5) * 18; }
-    this.bsize[i] = def.size; this.bage[i] = 0; this.bteam[i] = team; this.bowner[i] = owner;
+    this.bsize[i] = def.size; this.bage[i] = 0; this.bteam[i] = team; this.bowner[i] = owner; this.bnade[i] = w === "grenade" ? 1 : 0;
   }
 
   /** A burst of cardboard scraps (and a little packing paper). */
@@ -99,12 +100,12 @@ export class Fx {
       if (this.bage[i] < 0) continue;
       this.bage[i] += dt;
       const o = i * 3;
-      this.bv[o + 1] -= BOX_GRAVITY * dt;
+      this.bv[o + 1] -= (this.bnade[i] ? GRENADE_GRAVITY : BOX_GRAVITY) * dt;
       const sp = Math.hypot(this.bv[o], this.bv[o + 1], this.bv[o + 2]);
       const dx = this.bv[o] / sp, dy = this.bv[o + 1] / sp, dz = this.bv[o + 2] / sp, seg = sp * dt;
       const hit = this.hitTest(this.bx[o], this.bx[o + 1], this.bx[o + 2], dx, dy, dz, seg, this.bteam[i], this.bowner[i]);
       this.bx[o] += dx * hit.t; this.bx[o + 1] += dy * hit.t; this.bx[o + 2] += dz * hit.t;
-      if (hit.t < seg || this.bage[i] > BOX_LIFE_S) {
+      if (hit.t < seg || this.bage[i] > (this.bnade[i] ? GRENADE_FUSE_S : BOX_LIFE_S)) {
         if (hit.t < seg) this.bits(this.bx[o], this.bx[o + 1], this.bx[o + 2], hit.player ? 6 : 4);
         this.bage[i] = -1; this.hide(i); continue;
       }

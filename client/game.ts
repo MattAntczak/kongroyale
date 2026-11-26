@@ -12,7 +12,9 @@ import { setDynamicBoxes } from "../shared/physics";
 import type { Box } from "../shared/map";
 import { buildWorld, forkliftModel, type WorldHandle } from "./world";
 import { Human, TEAM_COLORS, TEAM_CSS, gunModel } from "./human";
-import { TEAM_FRAG_LIMIT, TEAM_NAMES } from "../shared/sim";
+import { CONNECT_R, TEAM_NAMES, TEAM_SHORT } from "../shared/sim";
+import { layout, useLayout, LAYOUTS } from "../shared/map";
+import { STORIES } from "./story";
 import { Fx } from "./fx";
 import { drawMinimap } from "./minimap";
 import * as sfx from "./audio";
@@ -68,7 +70,6 @@ export class Game {
   /** Our own worker, drawn only while we drive (the chase camera sees us). */
   private selfHuman: Human | null = null;
   private myTeam = -1;
-  private announced = false;
   private endMvp = "";
   private room = "";
   private body: Body = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, onGround: true };
@@ -78,8 +79,13 @@ export class Game {
   private keys = new Set<string>();
   private mouseDown = false; private clicked = false;
   private w: WeaponId = "rifle";
-  private mag: Record<WeaponId, number> = { rifle: 30, pistol: 12, shotgun: 0 };
-  private res: Record<WeaponId, number> = { rifle: 120, pistol: 999, shotgun: 0 };
+  private mag: Record<WeaponId, number> = { rifle: 30, pistol: 12, shotgun: 0, grenade: 2 };
+  private res: Record<WeaponId, number> = { rifle: 120, pistol: 999, shotgun: 0, grenade: 0 };
+  /** Holding E on the server cable. */
+  private acting = false;
+  private dropMeshes: THREE.Mesh[] = [];
+  private proj = new THREE.Vector3();
+  private disposed = false;
   private owned = new Set<WeaponId>(["rifle", "pistol"]);
   private reloadUntil = 0; private reloadStart = 0;
   private fireReady = 0; private lastShotAt = -9; private lastSwitchAt = -9;
@@ -95,7 +101,10 @@ export class Game {
   private hudCache: Record<string, string> = {};
   private disposers: (() => void)[] = [];
 
-  constructor(private link: Link, private onQuit: (msg?: string) => void) {
+  /** `first` is the snapshot that told us a shift is on: it names the hall configuration and the mission. */
+  constructor(private link: Link, myId: number, room: string, first: Extract<HostMsg, { t: "snap" }>, private onQuit: (msg?: string) => void) {
+    this.myId = myId; this.room = room;
+    useLayout(first.layout);
     const canvas = $<HTMLCanvasElement>("view");
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
@@ -121,7 +130,9 @@ export class Game {
     for (const [x, z] of [[-90, 0], [-45, 0], [0, -30], [0, 30], [45, 0], [90, 0]]) {
       const p = new THREE.PointLight(0xfff1dc, 60, 45, 1.6); p.position.set(x, 9.5, z); this.scene.add(p);
     }
-    this.world = buildWorld(this.scene);
+    this.world = buildWorld(this.scene, first.mission);
+    const caseMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.3, metalness: 0.5, emissive: 0x474fff, emissiveIntensity: 0.25 });
+    for (let i = 0; i < 8; i++) { const c = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.3, 0.3), caseMat); c.visible = false; this.scene.add(c); this.dropMeshes.push(c); }
     this.fx = new Fx(this.scene, this.boxHit);
 
     // first-person view model
@@ -142,8 +153,7 @@ export class Game {
     this.bindPause();
     $("hud").hidden = false;
     this.resize();
-    link.onMessage = (m) => this.onMessage(m);
-    link.onClose = (reason) => this.quit(reason);
+    this.showBrief(first);
     this.raf = requestAnimationFrame((t) => this.frame(t));
   }
 
@@ -182,7 +192,7 @@ export class Game {
     this.on(document, "pointerlockchange", () => {
       if (this.locked) { this.paused = false; $("pause").hidden = true; return; }
       this.mouseDown = false; this.keys.clear();
-      if (!this.chatting && !this.quitting) { this.paused = true; $("pause").hidden = false; }
+      if (!this.chatting && !this.quitting && this.latest?.phase === "play") { this.paused = true; $("pause").hidden = false; }
     });
     this.on(document, "mousemove", (e: MouseEvent) => {
       if (!this.locked) return;
@@ -202,13 +212,22 @@ export class Game {
       if (!this.locked) return;
       this.keys.add(e.code);
       if (e.code === "KeyR") this.reload();
-      if (e.code === "KeyE") this.link.send({ t: "use" });
+      if (e.code === "KeyE" && !e.repeat) {
+        // at the server a technician holds E to connect it; anywhere else E is the forklift
+        if (this.canConnect()) { this.acting = true; this.link.send({ t: "act", on: true }); }
+        else this.link.send({ t: "use" });
+      }
       if (e.code === "Digit1") this.switchTo("rifle");
       if (e.code === "Digit2") this.switchTo("pistol");
       if (e.code === "Digit3") this.switchTo("shotgun");
+      if (e.code === "Digit4" && this.mag.grenade > 0) this.switchTo("grenade");
       if (e.code === "KeyT" || e.code === "Enter") { e.preventDefault(); this.openChat(); }
     });
-    this.on(window, "keyup", (e: KeyboardEvent) => { this.keys.delete(e.code); if (e.code === "Tab") this.showBoard(false); });
+    this.on(window, "keyup", (e: KeyboardEvent) => {
+      this.keys.delete(e.code);
+      if (e.code === "Tab") this.showBoard(false);
+      if (e.code === "KeyE" && this.acting) { this.acting = false; this.link.send({ t: "act", on: false }); }
+    });
     this.on(window, "blur", () => { this.keys.clear(); this.mouseDown = false; });
     const box = $<HTMLInputElement>("chatbox");
     this.on(box, "keydown", (e: KeyboardEvent) => {
@@ -271,7 +290,7 @@ export class Game {
 
   private reload() {
     const w = WEAPONS[this.w];
-    if (this.reloadUntil || !this.alive || this.mag[this.w] >= w.mag || this.res[this.w] <= 0) return;
+    if (this.reloadUntil || !this.alive || !w.reloadS || this.mag[this.w] >= w.mag || this.res[this.w] <= 0) return;
     this.reloadStart = this.nowS;
     this.reloadUntil = this.nowS + w.reloadS;
     this.link.send({ t: "reload" });
@@ -298,7 +317,7 @@ export class Game {
     if (!want || !this.alive || !this.locked || this.latest?.phase !== "play") return;
     const now = this.nowS;
     if (this.reloadUntil || now < this.fireReady) return;
-    if (this.mag[this.w] <= 0) { sfx.dryFire(); this.fireReady = now + 0.25; this.reload(); return; }
+    if (this.mag[this.w] <= 0) { sfx.dryFire(); this.fireReady = now + 0.25; if (this.w === "grenade") this.switchTo("rifle"); else this.reload(); return; }
     this.fireReady = (now - this.fireReady > 0.1 ? now : this.fireReady) + 60 / w.rpm;
     this.mag[this.w]--;
     this.lastShotAt = now;
@@ -315,18 +334,37 @@ export class Game {
     this.pitch = Math.min(1.5, this.pitch + w.kick * (0.6 + Math.random() * 0.5));
     this.yaw += (Math.random() - 0.5) * w.kick * 0.5;
     this.vmKick = 1; this.vmFlashT = 0.045; this.shake = Math.min(1, this.shake + w.kick * 8);
-    if (this.mag[this.w] === 0) this.reload();
+    if (this.w === "grenade") { if (this.mag.grenade === 0) this.switchTo("rifle"); }
+    else if (this.mag[this.w] === 0) this.reload();
+  }
+
+  /** A technician within reach of the server, on foot, in the server mission. */
+  private canConnect() {
+    const m = this.latest;
+    if (!m || m.mission !== "server" || m.phase !== "play" || this.myTeam !== 1 || !this.alive || this.veh >= 0) return false;
+    const s = layout().server;
+    return Math.hypot(this.body.x - s.x, this.body.z - s.z) <= CONNECT_R;
+  }
+
+  /** The loading screen: the mission's story scrolls up while the hall is built, then our own task. */
+  private showBrief(m: Extract<HostMsg, { t: "snap" }>) {
+    const st = STORIES[m.mission];
+    $("crawlText").innerHTML = `<p class="ep">${st.episode}</p><h1>${st.title}</h1>` + st.text.map((t) => `<p>${t}</p>`).join("");
+    const team = m.me.team & 1;
+    $("briefRole").innerHTML = `<span class="badge" style="background:${TEAM_CSS[team]};color:#fff">${TEAM_NAMES[team]}</span><b>${st.task[team]}</b>`;
+    $("briefLayout").textContent = `Konfiguracja hali ${LAYOUTS[m.layout].name}`;
+    $("brief").hidden = m.phase !== "brief";
+    // restart the crawl
+    const el = $("crawlText"); el.style.animation = "none"; void el.offsetHeight; el.style.animation = "";
   }
 
   // ---------------------------------------------------------------- messages
 
-  private onMessage(m: HostMsg) {
-    switch (m.t) {
-      case "welcome": this.myId = m.id; this.room = m.room; this.announced = false; break;
-      case "error": this.quit(m.text); break;
-      case "snap": this.onSnap(m); break;
-      case "ev": for (const e of m.evs) this.onEvent(e); break;
-    }
+  /** A message from the host, routed here by main.ts while a shift is on. */
+  handle(m: HostMsg) {
+    if (this.disposed) return;
+    if (m.t === "snap") this.onSnap(m);
+    else if (m.t === "ev") for (const e of m.evs) this.onEvent(e);
   }
 
   private onSnap(m: Extract<HostMsg, { t: "snap" }>) {
@@ -367,7 +405,6 @@ export class Game {
       this.humans.clear();
     }
     this.sleeveMat.color.setHex(TEAM_COLORS[me.team & 1]);
-    if (!this.announced) { this.announced = true; this.toast(`Grasz w: ${TEAM_NAMES[me.team & 1]}`); }
     if (now - this.lastSwitchAt > 0.6 && me.w !== this.w) { this.w = me.w; this.setVmGun(me.w); }
     const quietGun = now - this.lastShotAt > 0.4;
     const reloadDone = !this.reloadUntil || now > this.reloadUntil + 0.25;
@@ -377,6 +414,9 @@ export class Game {
     this.world.setPickups(m.pickups);
     if (prevPhase === "play" && m.phase === "end") this.showEnd(true);
     if (m.phase === "play") $("end").hidden = true;
+    $("brief").hidden = m.phase !== "brief";
+    if (prevPhase === "brief" && m.phase === "play") this.toast(STORIES[m.mission].task[me.team & 1]);
+    if (this.acting && !this.canConnect()) { this.acting = false; this.link.send({ t: "act", on: false }); }
   }
 
   private onEvent(e: Ev) {
@@ -419,11 +459,28 @@ export class Game {
       case "join": this.feed(`<b>${esc(e.name)}</b> wchodzi na halę`, false); break;
       case "leave": this.feed(`<b>${esc(e.name)}</b> kończy zmianę`, false); break;
       case "chat": this.chat(e.name, e.text); break;
-      case "end":
-        $("endTitle").textContent = e.winner < 0 ? "Remis: obie grupy równo" : `${TEAM_NAMES[e.winner]} wygrywa zmianę`;
-        this.endMvp = e.mvp;
+      case "boom": {
+        const d = Math.hypot(e.x - this.body.x, e.z - this.body.z);
+        this.fx.bits(e.x, e.y, e.z, 70);
+        sfx.boom(d);
+        if (d < 12) this.shake = Math.min(1, this.shake + (1 - d / 12) * 0.9);
         break;
-      case "start": $("end").hidden = true; break;
+      }
+      case "obj": {
+        const who = name(e.id), mine = e.id === this.myId;
+        if (e.what === "connect") { this.feed(`<b style="color:${TEAM_CSS[1]}">Technicy</b> podłączają serwer`, true); if (this.myTeam === 0) { this.toast("Technicy są przy serwerze!"); sfx.alert(); } }
+        else if (e.what === "tagpick") { if (mine) { this.toast("Masz tagi zegarkowe. Zanieś je do stacji ładowania"); sfx.pickup(); } }
+        else if (e.what === "tagdrop") this.feed(`<b>${esc(who)}</b> upuszcza skrzynkę tagów`, mine);
+        else if (e.what === "tagseized") this.feed(`<b style="color:${TEAM_CSS[0]}">${esc(who)}</b> przejmuje skrzynkę tagów`, mine);
+        else if (e.what === "tagdeliver") { this.feed(`<b style="color:${TEAM_CSS[1]}">${esc(who)}</b> dostarcza tagi do stacji`, true); sfx.alert(); if (mine) this.toast("Tagi dostarczone"); }
+        break;
+      }
+      case "end":
+        $("endTitle").textContent = e.reason === "server" ? "Serwer podłączony: technicy efectivo wygrywają"
+          : e.reason === "tags" ? "Tagi dostarczone: technicy efectivo wygrywają" : "Czas minął: pracownicy obronili halę";
+        this.endMvp = e.mvp;
+        $("endSub").dataset.won = String(e.winner === this.myTeam);
+        break;
     }
   }
 
@@ -452,7 +509,7 @@ export class Game {
     let html = "";
     for (const t of [this.myTeam & 1, (this.myTeam & 1) ^ 1]) {
       const list = [...this.names.values()].filter((p) => p.tm === t).sort((a, b) => b.k - a.k || a.d - b.d);
-      html += `<tr class="team"><th style="color:${TEAM_CSS[t]}"><span class="swatch" style="background:${TEAM_CSS[t]}"></span>${TEAM_NAMES[t]}${t === this.myTeam ? " · twoja" : ""}</th><th class="num" colspan="3" style="color:var(--text)">${score[t]} / ${TEAM_FRAG_LIMIT}</th></tr>`;
+      html += `<tr class="team"><th style="color:${TEAM_CSS[t]}"><span class="swatch" style="background:${TEAM_CSS[t]}"></span>${TEAM_NAMES[t]}${t === this.myTeam ? " · twoja drużyna" : ""}</th><th class="num" colspan="3" style="color:var(--text)">${score[t]} eliminacji</th></tr>`;
       html += list.map((p) =>
         `<tr class="${p.id === this.myId ? "me" : ""}"><td>${esc(p.n)}${p.bot ? '<span class="botmark">BOT</span>' : ""}</td><td class="num">${p.k}</td><td class="num">${p.d}</td><td class="num">${(p.k / Math.max(1, p.d)).toFixed(2)}</td></tr>`).join("");
     }
@@ -470,7 +527,8 @@ export class Game {
       $("endTable").innerHTML = this.boardHtml();
       const me = this.names.get(this.myId);
       const s = this.latest?.score ?? [0, 0];
-      $("endSub").textContent = `${TEAM_NAMES[0]} ${s[0]} : ${s[1]} ${TEAM_NAMES[1]}. Najlepszy pracownik zmiany: ${this.endMvp || "–"}.` + (me ? ` Twój wynik: ${me.k} eliminacji, ${me.d} zgonów.` : "");
+      const won = $("endSub").dataset.won === "true";
+      $("endSub").textContent = `${won ? "Twoja drużyna wygrała." : "Twoja drużyna przegrała."} Eliminacje: ${TEAM_SHORT[0]} ${s[0]}, ${TEAM_SHORT[1]} ${s[1]}. Najlepszy na zmianie: ${this.endMvp || "–"}.` + (me ? ` Ty: ${me.k} eliminacji, ${me.d} zgonów.` : "");
     }
   }
 
@@ -539,6 +597,7 @@ export class Game {
           yaw = pa.yaw + dy * k; pitch = pa.pitch + (pb.pitch - pa.pitch) * k;
         }
         h.setWeapon(pb.w);
+        h.setCarry(pb.carry);
         const d = Math.hypot(x - this.body.x, z - this.body.z);
         // a driver faces where the forklift faces, sitting; a thrower stands and aims freely
         const ride = pb.veh >= 0 ? this.vehPoses.get(pb.veh) : undefined;
@@ -671,20 +730,39 @@ export class Game {
     if (!m) return;
     const left = Math.ceil(m.left);
     const clock = `${String(Math.floor(left / 60)).padStart(2, "0")}:${String(left % 60).padStart(2, "0")}`;
-    const sc = m.score, mt = this.myTeam & 1;
-    this.set("score", `<span class="${mt === 0 ? "me" : ""}"><i style="background:${TEAM_CSS[0]}"></i>${sc[0]}</span><time>${clock}</time><span class="${mt === 1 ? "me" : ""}">${sc[1]}<i style="background:${TEAM_CSS[1]}"></i></span>`, true);
+    const mt = this.myTeam & 1;
+    // the mission in one pill: what the technicians have done so far, and the time the workers still have to hold
+    const o = m.obj;
+    const state = "p" in o
+      ? `<span class="obj${o.on ? " live" : ""}">Serwer<em><i style="width:${Math.round(o.p * 100)}%"></i></em><b>${Math.round(o.p * 100)}%</b></span>`
+      : `<span class="obj">Tagi<b>${o.n} / ${o.need}</b></span>`;
+    this.set("score", `${state}<time>${m.phase === "play" ? clock : "--:--"}</time>`, true);
+    this.set("teamChip", `<i style="background:${TEAM_CSS[mt]}"></i>${TEAM_NAMES[mt]}<small>${mt === 0 ? "obrona" : "atak"}</small>`, true);
+    $("carry").hidden = !m.me.carry;
+    // dropped cases on the floor
+    const drops = "drops" in o ? o.drops : [];
+    for (let k = 0; k < this.dropMeshes.length; k++) {
+      const dm = this.dropMeshes[k], d = drops[k];
+      dm.visible = !!d;
+      if (d) { dm.position.set(d[0], 0.2 + Math.sin(nowS * 3 + k) * 0.05, d[1]); dm.rotation.y = nowS + k; }
+    }
+    this.updateMarker(m, drops);
     if (!$("board").hidden && nowS - this.boardT > 0.5) { this.boardT = nowS; $("boardTable").innerHTML = this.boardHtml(); }
     const hp = Math.max(0, m.me.hp);
     this.set("hp", String(hp));
     ($("hpbar").firstElementChild as HTMLElement).style.width = hp + "%";
     $("hpbar").classList.toggle("low", hp <= 35);
     const w = WEAPONS[this.w];
-    this.set("wname", this.reloadUntil ? "Przeładowanie…" : w.name);
-    this.set("mag", String(this.mag[this.w]));
-    this.set("res", this.res[this.w] >= 900 ? "/ ∞" : `/ ${this.res[this.w]}`);
+    // four slots, always in the same place: 1 2 3 4
+    this.set("slots", WEAPON_ORDER.map((id, k) => {
+      const def = WEAPONS[id], own = this.owned.has(id) && (id !== "grenade" || this.mag.grenade > 0);
+      const count = !this.owned.has(id) ? "" : id === "grenade" ? `${this.mag.grenade}` : `${this.mag[id]}<small>/${this.res[id] >= 900 ? "∞" : this.res[id]}</small>`;
+      return `<div class="${id === this.w ? "on" : own ? "" : "off"}"><kbd>${k + 1}</kbd><span>${id === this.w && this.reloadUntil ? "Przeładowanie…" : def.name}</span><b>${count}</b></div>`;
+    }).join(""), true);
     const use = this.usable();
     // on board the prompt shows only for the first seconds: the ride itself needs no label
-    const prompt = this.veh >= 0 && m.me.alive ? (nowS - this.rideT < 4 ? "Wysiądź" : "") : use ? (use.seat === 0 ? "Prowadź wózek" : "Wskocz na wózek") : "";
+    const prompt = this.acting ? "Podłączasz serwer… trzymaj" : this.canConnect() ? "Przytrzymaj: podłącz serwer"
+      : this.veh >= 0 && m.me.alive ? (nowS - this.rideT < 4 ? "Wysiądź" : "") : use ? (use.seat === 0 ? "Prowadź wózek" : "Wskocz na wózek") : "";
     $("usePrompt").hidden = !prompt;
     if (prompt) this.set("usePromptText", prompt);
     // crosshair opens with spread
@@ -698,23 +776,59 @@ export class Game {
     if (this.toastT > 0) { this.toastT -= dt; if (this.toastT <= 0) $("toast").classList.remove("on"); }
     // death screen
     $("death").hidden = m.me.alive || m.phase !== "play";
-    if (!m.me.alive) this.set("deathCount", `Powrót na halę za ${Math.ceil(m.me.respawnIn)} s`);
-    if (m.phase === "end") this.set("endCount", `Nowa zmiana za ${Math.ceil(m.left)} s`);
+    if (!m.me.alive) this.set("deathCount", `Następna fala za ${Math.ceil(m.me.respawnIn)} s`);
+    if (m.phase === "end") this.set("endCount", `Powrót do lobby za ${Math.ceil(m.left)} s`);
+    if (m.phase === "brief") this.set("briefCount", `Start za ${Math.ceil(m.left)} s`);
     // Live map
     $("geo").hidden = m.me.geo <= 0;
-    drawMinimap(this.mapCtx, m.players, [...this.vehPoses.values()], this.myId, this.myTeam, { x: this.body.x, z: this.body.z, yaw: this.yaw }, m.me.geo > 0, nowS);
+    drawMinimap(this.mapCtx, m.players, [...this.vehPoses.values()], this.myId, this.myTeam, { x: this.body.x, z: this.body.z, yaw: this.yaw }, m.me.geo > 0, nowS, { mission: m.mission, drops, connecting: "on" in o && o.on });
   }
 
-  quit(msg?: string) {
-    if (this.quitting) return;
-    this.quitting = true;
+  /** The pointer to where we have to go: projected on the screen, pinned to its edge when the place is off it. */
+  private updateMarker(m: Extract<HostMsg, { t: "snap" }>, drops: [number, number][]) {
+    const l = layout();
+    let tx = l.server.x, tz = l.server.z, label = "Serwer";
+    if (m.mission === "tags") {
+      const nearest = (pts: { x: number; z: number }[]) => pts.reduce((a, b) => Math.hypot(a.x - this.body.x, a.z - this.body.z) <= Math.hypot(b.x - this.body.x, b.z - this.body.z) ? a : b);
+      const dropPts = drops.map(([x, z]) => ({ x, z }));
+      const carrier = m.players.find((p) => p.carry && p.alive && p.tm === 1);
+      let t: { x: number; z: number };
+      if (this.myTeam === 1) { if (m.me.carry) { t = nearest(l.stations); label = "Stacja"; } else { t = nearest([...dropPts, ...l.supply]); label = "Tagi"; } }
+      else if (dropPts.length) { t = nearest(dropPts); label = "Skrzynka"; }
+      else if (carrier) { t = carrier; label = "Tagi"; }
+      else { t = nearest(l.stations); label = "Stacja"; }
+      tx = t.x; tz = t.z;
+    }
+    const el = $("marker");
+    const dist = Math.hypot(tx - this.body.x, tz - this.body.z);
+    el.hidden = m.phase !== "play" || dist < 4;
+    if (el.hidden) return;
+    const v = this.proj.set(tx, 2.6, tz).project(this.camera);
+    const w = window.innerWidth, h = window.innerHeight;
+    let sx = (v.x * 0.5 + 0.5) * w, sy = (-v.y * 0.5 + 0.5) * h;
+    if (v.z > 1) { sx = w - sx; sy = h - 40; } // behind us: show it low, mirrored
+    sx = Math.max(40, Math.min(w - 40, sx)); sy = Math.max(110, Math.min(h - 120, sy));
+    el.style.transform = `translate(${sx.toFixed(0)}px, ${sy.toFixed(0)}px)`;
+    this.set("markerText", `${label} ${Math.round(dist)} m`);
+  }
+
+  /** Leave the shift's screen. The room and its link stay: main.ts shows the lobby again. */
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true; this.quitting = true;
     cancelAnimationFrame(this.raf);
     for (const d of this.disposers) d();
-    this.link.close();
     if (document.pointerLockElement) document.exitPointerLock();
-    for (const id of ["hud", "pause", "board", "end", "death"]) $(id).hidden = true;
+    for (const id of ["hud", "pause", "board", "end", "death", "brief"]) $(id).hidden = true;
     $("feed").innerHTML = ""; $("chat").innerHTML = "";
     this.renderer.dispose();
+  }
+
+  /** Leave the room altogether (the pause menu, or a lost connection). */
+  quit(msg?: string) {
+    if (this.disposed) return;
+    this.dispose();
+    this.link.close();
     this.onQuit(msg);
   }
 }

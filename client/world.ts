@@ -3,7 +3,8 @@
 // pickups. Every texture is drawn on a canvas at start-up, so the hall needs no downloaded assets.
 
 import * as THREE from "three";
-import { ANCHORS, BOXES, DOCKS, HALL, LADDERS, PICKUPS, ZONES, type PickupKind } from "../shared/map";
+import { ANCHORS, BOXES, DOCKS, HALL, LADDERS, PICKUPS, ZONES, layout, type PickupKind } from "../shared/map";
+import type { Mission } from "../shared/proto";
 import { gunModel } from "./human";
 
 const ACCENT = 0x474fff;
@@ -177,7 +178,8 @@ export interface WorldHandle {
   group: THREE.Group;
 }
 
-export function buildWorld(scene: THREE.Scene): WorldHandle {
+/** Build the current hall configuration (shared/map.ts `useLayout`) with the objects of this shift's mission. */
+export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
   const group = new THREE.Group();
   scene.add(group);
 
@@ -388,6 +390,65 @@ export function buildWorld(scene: THREE.Scene): WorldHandle {
     sign.position.set(cx, h + 0.4, b.z0 - 0.02); sign.rotation.y = Math.PI; group.add(sign);
   }
 
+  // partition walls: grey sandwich panels with a yellow cap
+  for (const b of BOXES) {
+    if (b.kind !== "panel") continue;
+    const sx = b.x1 - b.x0, sz = b.z1 - b.z0, cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2;
+    const t = wallTex.clone(); t.needsUpdate = true; t.repeat.set(sx / 3, 1);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, b.y1, sz), new THREE.MeshStandardMaterial({ map: t, color: 0xd0d4dc, roughness: 0.7, metalness: 0.2 }));
+    m.position.set(cx, b.y1 / 2, cz); m.castShadow = m.receiveShadow = true; group.add(m);
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.02, 0.12, sz + 0.06), lineMat); cap.position.set(cx, b.y1 + 0.06, cz); group.add(cap);
+  }
+
+  // the local server: a black cabinet with efectivo-blue status lights, on a marked pad
+  const blink: THREE.Mesh[] = [];
+  const accentMat = new THREE.MeshBasicMaterial({ color: ACCENT });
+  const ring = (x: number, z: number, r: number, color: number) => {
+    const m = new THREE.Mesh(new THREE.RingGeometry(r - 0.12, r, 48), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, side: THREE.DoubleSide }));
+    m.rotation.x = -Math.PI / 2; m.position.set(x, 0.03, z); group.add(m);
+  };
+  for (const b of BOXES) {
+    if (b.kind !== "server") continue;
+    const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2;
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(b.x1 - b.x0, b.y1, b.z1 - b.z0), new THREE.MeshStandardMaterial({ color: 0x0c0d10, roughness: 0.35, metalness: 0.7 }));
+    cab.position.set(cx, b.y1 / 2, cz); cab.castShadow = cab.receiveShadow = true; group.add(cab);
+    for (const [dx, dz, ry] of [[0.51, 0, Math.PI / 2], [-0.51, 0, -Math.PI / 2], [0, 0.51, 0], [0, -0.51, Math.PI]] as const) {
+      const label = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.2), new THREE.MeshBasicMaterial({ map: labelTexture("efectivo · SERWER", "#000000", "#f5f5f7", 512, 128, 44) }));
+      label.position.set(cx + dx, 1.8, cz + dz); label.rotation.y = ry; group.add(label);
+      for (let k = 0; k < 5; k++) {
+        const led = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.035), accentMat);
+        led.position.set(cx + dx, 0.5 + k * 0.22, cz + dz); led.rotation.y = ry; group.add(led); blink.push(led);
+      }
+    }
+    if (mission === "server") ring(cx, cz, 3, ACCENT);
+  }
+
+  // mission "tags": the charging stations that take the watch tags, and the delivery waiting by the docks
+  if (mission === "tags") {
+    const caseMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.3, metalness: 0.5 });
+    const dockMat = new THREE.MeshStandardMaterial({ color: 0xf5f5f7, roughness: 0.4 });
+    for (const st of layout().stations) {
+      const base = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.0, 0.8), dockMat); base.position.set(st.x, 0.5, st.z); base.castShadow = base.receiveShadow = true; group.add(base);
+      // rows of watch tags on their chargers: a black face on a strap, a blue dot when charged
+      for (let i = 0; i < 6; i++) for (let j = 0; j < 2; j++) {
+        const tag = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.03, 0.12), caseMat); tag.position.set(st.x - 0.62 + i * 0.25, 1.02, st.z - 0.18 + j * 0.36); group.add(tag);
+        const dot = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.035, 0.04), accentMat); dot.position.copy(tag.position); dot.position.y += 0.005; group.add(dot); if ((i + j) % 2) blink.push(dot);
+      }
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.3), new THREE.MeshBasicMaterial({ map: labelTexture("STACJA TAGÓW", "#16a34a", "#ffffff", 512, 112, 56), side: THREE.DoubleSide }));
+      sign.position.set(st.x, 1.75, st.z); group.add(sign);
+      ring(st.x, st.z, 2.6, 0x16a34a);
+    }
+    for (const sp of layout().supply) {
+      for (const [dx, dy, dz] of [[0, 0, 0], [0.5, 0, 0.1], [0.2, 0.3, 0.05], [-0.45, 0, -0.1]]) {
+        const c = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.3, 0.3), caseMat); c.position.set(sp.x + dx, 0.15 + dy, sp.z + dz); c.castShadow = true; group.add(c);
+        const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.445, 0.04, 0.305), accentMat); stripe.position.set(sp.x + dx, 0.2 + dy, sp.z + dz); group.add(stripe);
+      }
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.3), new THREE.MeshBasicMaterial({ map: labelTexture("DOSTAWA TAGÓW", "#474fff", "#ffffff", 512, 100, 52), side: THREE.DoubleSide }));
+      sign.position.set(sp.x, 1.6, sp.z); sign.rotation.y = Math.PI / 2; group.add(sign);
+      ring(sp.x, sp.z, 2.6, ACCENT);
+    }
+  }
+
   // wire cage
   for (const b of BOXES) {
     if (b.kind !== "cage") continue;
@@ -425,6 +486,7 @@ export function buildWorld(scene: THREE.Scene): WorldHandle {
     update(t: number) {
       const s = 0.6 + 0.4 * Math.sin(t * 3);
       for (const l of leds) l.scale.setScalar(0.8 + s * 0.5);
+      for (let i = 0; i < blink.length; i++) blink[i].visible = Math.sin(t * 4 + i * 1.7) > -0.4;
       for (let i = 0; i < pickups.length; i++) { pickups[i].rotation.y = t * 1.6 + i; pickups[i].position.y = 0.85 + Math.sin(t * 2 + i) * 0.08; }
     },
     setPickups(active: boolean[]) { for (let i = 0; i < pickups.length; i++) pickups[i].visible = !!active[i]; },

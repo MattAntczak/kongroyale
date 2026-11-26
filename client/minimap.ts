@@ -2,7 +2,7 @@
 // own tag, your group's tags always (their UWB tags are on our network), and enemies only while they are firing —
 // or all of them while efectivo GEO runs.
 
-import { BOXES, HALL, ZONES } from "../shared/map";
+import { BOXES, HALL, LAYOUT, ZONES, layout } from "../shared/map";
 import type { PlayerSnap } from "../shared/proto";
 import type { VehicleState } from "../shared/vehicle";
 
@@ -10,7 +10,7 @@ const W = 544, H = Math.round(544 * (HALL.z1 - HALL.z0) / (HALL.x1 - HALL.x0));
 const sx = W / (HALL.x1 - HALL.x0), sz = H / (HALL.z1 - HALL.z0);
 const X = (x: number) => (x - HALL.x0) * sx, Z = (z: number) => (z - HALL.z0) * sz;
 
-let base: HTMLCanvasElement | null = null;
+const bases: (HTMLCanvasElement | undefined)[] = [];
 
 function drawBase(): HTMLCanvasElement {
   const c = document.createElement("canvas"); c.width = W; c.height = H;
@@ -22,17 +22,32 @@ function drawBase(): HTMLCanvasElement {
   }
   for (const b of BOXES) {
     if (b.kind === "wall") continue;
-    g.fillStyle = b.climb ? "#474fff" : b.kind === "rack" ? "#cbd5e1" : b.kind === "column" ? "#94a3b8" : "#e2e8f0";
+    g.fillStyle = b.climb ? "#474fff" : b.kind === "rack" ? "#cbd5e1" : b.kind === "column" || b.kind === "panel" ? "#94a3b8" : b.kind === "server" ? "#0f172a" : "#e2e8f0";
     g.fillRect(X(b.x0), Z(b.z0), (b.x1 - b.x0) * sx, (b.z1 - b.z0) * sz);
   }
   return c;
 }
 
-const TEAM_RGB = ["71,79,255", "255,106,0"];
+const TEAM_RGB = ["255,106,0", "71,79,255"];
 
-export function drawMinimap(ctx: CanvasRenderingContext2D, players: PlayerSnap[], vehicles: VehicleState[], myId: number, myTeam: number, me: { x: number; z: number; yaw: number }, geo: boolean, t: number) {
-  if (!base) base = drawBase();
+/** What the mission adds to the map. */
+export interface MapMission { mission: "server" | "tags"; drops: [number, number][]; connecting: boolean }
+
+export function drawMinimap(ctx: CanvasRenderingContext2D, players: PlayerSnap[], vehicles: VehicleState[], myId: number, myTeam: number, me: { x: number; z: number; yaw: number }, geo: boolean, t: number, mm: MapMission) {
+  const base = bases[LAYOUT] ?? (bases[LAYOUT] = drawBase());
   ctx.drawImage(base, 0, 0);
+  // the mission: the server (it pulses while someone is on the cable), or the stations, the delivery point and any
+  // case lying on the floor
+  const l = layout();
+  const mark = (x: number, z: number, fill: string, r: number) => { ctx.fillStyle = fill; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.roundRect(X(x) - r, Z(z) - r, r * 2, r * 2, 3); ctx.fill(); ctx.stroke(); };
+  if (mm.mission === "server") {
+    if (mm.connecting) { const k = (t * 1.5) % 1; ctx.strokeStyle = `rgba(71,79,255,${1 - k})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(X(l.server.x), Z(l.server.z), 8 + k * 26, 0, Math.PI * 2); ctx.stroke(); }
+    mark(l.server.x, l.server.z, "#0f172a", 8);
+  } else {
+    for (const s of l.stations) mark(s.x, s.z, "#16a34a", 7);
+    for (const s of l.supply) mark(s.x, s.z, "#474fff", 7);
+    for (const [x, z] of mm.drops) mark(x, z, "#f59e0b", 5);
+  }
   // forklifts: small dark bodies, like the vehicle markers on the Live map
   for (const v of vehicles) {
     ctx.save(); ctx.translate(X(v.x), Z(v.z)); ctx.rotate(-v.yaw);
@@ -48,9 +63,10 @@ export function drawMinimap(ctx: CanvasRenderingContext2D, players: PlayerSnap[]
       ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2; ctx.stroke();
       continue;
     }
-    const show = geo || p.fired < 0.8;
+    // whoever carries watch tags is on the UWB network: always visible
+    const show = geo || p.carry || p.fired < 0.8;
     if (!show) continue;
-    const a = geo ? 1 : 1 - p.fired / 0.8;
+    const a = geo || p.carry ? 1 : 1 - p.fired / 0.8;
     ctx.fillStyle = `rgba(240,68,56,${0.18 * a})`;
     ctx.beginPath(); ctx.arc(X(p.x), Z(p.z), 12, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = `rgba(240,68,56,${a})`;
@@ -69,7 +85,7 @@ export function drawMinimap(ctx: CanvasRenderingContext2D, players: PlayerSnap[]
   ctx.strokeStyle = `rgba(71,79,255,${0.7 * (1 - pulse)})`; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(mx, mz, 6 + pulse * 16, 0, Math.PI * 2); ctx.stroke();
   ctx.shadowColor = "rgba(71,79,255,0.9)"; ctx.shadowBlur = 10;
-  ctx.fillStyle = myTeam === 1 ? "#ff6a00" : "#474fff"; ctx.beginPath(); ctx.arc(mx, mz, 6, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = myTeam === 0 ? "#ff6a00" : "#474fff"; ctx.beginPath(); ctx.arc(mx, mz, 6, 0, Math.PI * 2); ctx.fill();
   ctx.shadowBlur = 0;
   ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(mx, mz, 6, 0, Math.PI * 2); ctx.stroke();
 }

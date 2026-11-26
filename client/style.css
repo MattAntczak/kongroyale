@@ -33,8 +33,8 @@
   --red-800: #981f16;
   --slate-800: #1e293b;
   --dimmer: rgba(0, 15, 35, 0.55);
-  --team-a: #474fff;
-  --team-b: #ff6a00;
+  --team-w: #ff6a00;
+  --team-t: #474fff;
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
@@ -106,6 +106,35 @@ canvas#view { position: fixed; inset: 0; width: 100vw; height: 100vh; display: b
 .keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 24px; font-size: 14px; }
 .keys div { display: flex; align-items: center; gap: 10px; color: var(--text-2); min-width: 0; }
 .keys kbd { font: 500 12px var(--font); padding: 2px 8px; border-radius: 6px; background: var(--gray-100); border: 1px solid var(--border); color: var(--text); white-space: nowrap; }
+/* ---------- the lobby: both teams side by side, a slot for everyone ---------- */
+.setup-row { display: flex; flex-wrap: wrap; gap: 20px 32px; align-items: flex-end; }
+.setup-row .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.setup-row .label { width: 100%; font-size: 14px; font-weight: 500; color: var(--text-2); }
+.setup-row .cta { margin-left: auto; align-items: center; gap: 12px; }
+.setup-row .status { flex-basis: 100%; }
+.hint { font-size: 14px; color: var(--muted); }
+#lobby { display: grid; gap: 24px; }
+.teams { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+.team-card.mine { border-color: var(--blue-500); box-shadow: 0 0 0 3px var(--blue-100); }
+.team-card h2 { display: flex; align-items: center; gap: 10px; }
+.team-desc { margin: 0 0 14px; color: var(--muted); }
+.slots-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; min-height: 40px; }
+.slot { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); font-size: 14px; font-weight: 500; min-width: 0; }
+.slot span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.slot i { font-style: normal; }
+.slot.me { border-color: var(--blue-500); background: var(--blue-50); color: var(--blue-800); }
+.slot.bot { color: var(--muted); background: var(--app-bg); }
+.slot-count { grid-column: 1 / -1; font-size: 12px; color: var(--muted); padding-top: 4px; }
+.team-foot { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
+.stepper { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-2); }
+.stepper button { width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--border); background: #fff; font-size: 18px; cursor: pointer; }
+.stepper button:hover:not(:disabled) { border-color: var(--blue-200); background: var(--blue-50); }
+.stepper b { min-width: 28px; text-align: center; font-size: 16px; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.items { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px 28px; font-size: 14px; color: var(--text-2); }
+.items b { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; color: var(--text-strong); font-weight: 600; }
+.items kbd, .keys kbd { font: 500 12px var(--font); padding: 1px 7px; border-radius: 6px; background: var(--gray-100); border: 1px solid var(--border); color: var(--text); }
+
 #title footer { padding: 8px 16px 32px; text-align: center; font-size: 12px; color: var(--muted); }
 
 /* ---------- in-game HUD: as little as the game needs, light text straight on the scene ---------- */
@@ -117,7 +146,6 @@ canvas#view { position: fixed; inset: 0; width: 100vw; height: 100vh; display: b
 .hud-top time { font-size: 13px; font-weight: 500; color: rgba(255, 255, 255, 0.7); }
 #toast { position: absolute; left: 50%; top: 60px; transform: translateX(-50%); font-size: 14px; font-weight: 500; opacity: 0; transition: opacity 0.3s; white-space: nowrap; }
 #toast.on { opacity: 1; }
-#feed { position: absolute; right: 16px; top: 14px; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 #feed div { font-size: 13px; color: rgba(255, 255, 255, 0.85); animation: feedIn 0.3s ease-out; }
 #feed div b { font-weight: 600; filter: brightness(1.35); }
 #feed div .w { margin: 0 6px; opacity: 0.6; font-size: 12px; }
@@ -134,18 +162,56 @@ canvas#view { position: fixed; inset: 0; width: 100vw; height: 100vh; display: b
 #hitmark.kill svg { stroke: var(--red-500); }
 #usePrompt { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
 #usePrompt kbd { font: 600 12px var(--font); padding: 2px 8px; border-radius: 6px; background: #fff; color: var(--text); text-shadow: none; }
-#map { position: absolute; left: 16px; bottom: 16px; width: 260px; border-radius: 10px; overflow: hidden; opacity: 0.9; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18); }
 #map canvas { display: block; width: 100%; height: 141px; }
 #map .geo { position: absolute; right: 6px; top: 6px; padding: 0 6px; border-radius: 4px; background: var(--blue-500); font-size: 11px; line-height: 18px; font-weight: 600; text-shadow: none; }
-.hud-br { position: absolute; right: 20px; bottom: 16px; display: flex; gap: 28px; align-items: flex-end; }
-.hud-br b { font-size: 30px; line-height: 1; font-weight: 600; font-variant-numeric: tabular-nums; }
-.vital { display: flex; align-items: center; gap: 10px; }
-.hpbar { width: 96px; height: 5px; border-radius: 5px; background: rgba(255, 255, 255, 0.25); overflow: hidden; }
-.hpbar i { display: block; height: 100%; width: 100%; background: #fff; border-radius: 5px; transition: width 0.2s ease-out; }
+/* top left: who we are and how we are doing */
+.hud-tl { position: absolute; left: 16px; top: 14px; display: grid; gap: 8px; justify-items: start; }
+.hud-tl .team { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px; border-radius: 15px; background: var(--panel); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); font-size: 14px; font-weight: 600; text-shadow: none; }
+.hud-tl .team i { width: 10px; height: 10px; border-radius: 50%; }
+.hud-tl .team small { font-size: 12px; font-weight: 500; opacity: 0.7; }
+.vital { display: flex; align-items: center; gap: 12px; padding-left: 2px; }
+.vital b { font-size: 44px; line-height: 1; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 78px; }
+.hpbar { width: 190px; height: 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.25); overflow: hidden; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35); }
+.hpbar i { display: block; height: 100%; width: 100%; background: #22c55e; border-radius: 10px; transition: width 0.2s ease-out; }
 .hpbar.low i { background: var(--red-500); }
-.ammo { display: grid; grid-template-columns: auto auto; column-gap: 6px; align-items: baseline; justify-items: end; }
-.ammo small { font-size: 15px; font-weight: 500; opacity: 0.7; }
-.ammo span { grid-column: 1 / 3; font-size: 12px; opacity: 0.7; margin-top: 2px; }
+.hud-tl .carry { padding: 4px 10px; border-radius: 6px; background: var(--blue-500); font-size: 13px; font-weight: 500; text-shadow: none; }
+/* top right: the Live map, the feed under it */
+.hud-tr { position: absolute; right: 16px; top: 14px; display: grid; gap: 8px; justify-items: end; }
+#map { position: relative; width: 280px; border-radius: 10px; overflow: hidden; opacity: 0.92; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18); }
+#feed { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+/* bottom right: four slots, 1 2 3 4 */
+.slots { position: absolute; right: 16px; bottom: 16px; display: flex; gap: 6px; text-shadow: none; }
+.slots div { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 8px; row-gap: 2px; min-width: 118px; padding: 8px 10px; border-radius: 10px; background: var(--panel); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid transparent; }
+.slots div.on { border-color: #fff; background: rgba(15, 23, 42, 0.8); }
+.slots div.off { opacity: 0.4; }
+.slots kbd { font: 600 11px var(--font); padding: 1px 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.18); }
+.slots div.on kbd { background: #fff; color: var(--text); }
+.slots span { font-size: 12px; opacity: 0.85; white-space: nowrap; }
+.slots b { grid-column: 1 / 3; font-size: 20px; line-height: 1.1; font-weight: 600; font-variant-numeric: tabular-nums; min-height: 22px; }
+.slots b small { font-size: 12px; font-weight: 500; opacity: 0.7; margin-left: 2px; }
+/* the mission in the top pill, and the pointer to the objective */
+.hud-top .obj { opacity: 1; gap: 10px; }
+.hud-top .obj em { display: block; width: 120px; height: 6px; border-radius: 6px; background: rgba(255, 255, 255, 0.25); overflow: hidden; }
+.hud-top .obj em i { display: block; width: 0; height: 100%; border-radius: 6px; background: var(--blue-500); }
+.hud-top .obj.live em i { background: #fff; }
+.hud-top .obj.live { animation: blink 0.8s ease-in-out infinite; }
+#marker { position: absolute; left: 0; top: 0; display: grid; justify-items: center; gap: 4px; margin: -20px 0 0 -50px; width: 100px; font-size: 12px; font-weight: 600; }
+#marker i { width: 12px; height: 12px; border: 2px solid #fff; background: var(--blue-500); transform: rotate(45deg); box-shadow: 0 0 6px rgba(0, 0, 0, 0.6); }
+
+/* ---------- the briefing: the story scrolls away into the distance ---------- */
+#brief { position: fixed; inset: 0; z-index: 9; background: #000; color: #f5f5f7; overflow: hidden; display: grid; grid-template-rows: 1fr auto; }
+.crawl { position: relative; perspective: 380px; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 30%, #000 100%); mask-image: linear-gradient(to bottom, transparent 0, #000 30%, #000 100%); }
+.crawl-text { position: absolute; left: 50%; bottom: 0; width: min(760px, 86vw); margin-left: calc(min(760px, 86vw) / -2); transform-origin: 50% 100%; text-align: justify; font-size: clamp(22px, 2.6vw, 34px); line-height: 1.5; font-weight: 600; color: #8f95ff; animation: crawl 21s linear forwards; }
+.crawl-text h1 { margin: 0 0 1.2em; text-align: center; font-size: 1.9em; line-height: 1.1; letter-spacing: 0.06em; color: #f5f5f7; }
+.crawl-text .ep { margin: 0 0 0.4em; text-align: center; font-weight: 500; }
+.crawl-text p { margin: 0 0 1.3em; }
+@keyframes crawl { from { transform: rotateX(24deg) translateY(100%); } to { transform: rotateX(24deg) translateY(-135%); } }
+.brief-foot { display: grid; gap: 10px; justify-items: center; padding: 20px 16px 28px; background: linear-gradient(to top, #000 60%, transparent); text-align: center; }
+.brief-foot .role { display: grid; gap: 10px; justify-items: center; max-width: 720px; font-size: 18px; }
+.brief-foot .role b { font-weight: 600; }
+.brief-foot .role .badge { font-size: 14px; line-height: 26px; padding: 0 12px; }
+.brief-meta { display: flex; gap: 18px; font-size: 13px; color: #a1a1a6; font-variant-numeric: tabular-nums; }
+
 #vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 55%, rgba(240, 68, 56, 0.45) 100%); opacity: 0; transition: opacity 0.5s; }
 
 /* overlays: white dialogs over the dimmer */
@@ -178,10 +244,10 @@ table.board tr.team th { background: #fff; font-size: 14px; font-weight: 600; pa
 #end .endtop { padding: 20px 20px 4px; }
 #end table { margin: 12px 0 0; }
 #end .endfoot { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; }
-#chat { position: absolute; left: 16px; bottom: 196px; display: flex; flex-direction: column; gap: 4px; max-width: 360px; font-size: 14px; }
+#chat { position: absolute; left: 16px; bottom: 76px; display: flex; flex-direction: column; gap: 4px; max-width: 360px; font-size: 14px; }
 #chat div { color: #fff; text-shadow: 0 1px 2px #000; }
 #chat div b { font-weight: 600; }
-#chatbox { position: absolute; left: 16px; bottom: 156px; width: 208px; pointer-events: auto; }
+#chatbox { position: absolute; left: 16px; bottom: 24px; width: 260px; pointer-events: auto; }
 
-@media (max-width: 960px) { .grid2 { grid-template-columns: 1fr; } }
-@media (prefers-reduced-motion: reduce) { .live-pill .dot { animation: none; } }
+@media (max-width: 960px) { .grid2, .teams { grid-template-columns: 1fr; } .setup-row .cta { margin-left: 0; } }
+@media (prefers-reduced-motion: reduce) { .live-pill .dot, .hud-top .obj.live { animation: none; } .crawl-text { animation: none; position: static; margin: 0 auto; transform: none; padding: 40px 0; } .crawl { overflow-y: auto; } }

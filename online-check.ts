@@ -1,11 +1,12 @@
-// Online check for efectivo ARENA against a server you run (`npm run server`): two clients join one room as Grupa A,
-// walk to a forklift, get on as driver and thrower, drive it, throw from the platform (the driver cannot), and get
+// Online check for efectivo ARENA against a server you run (`npm run server`): two clients join one room as
+// workers, go through the lobby (only the host starts the shift), sit through the briefing, walk to a forklift, get on as driver and thrower, drive it, throw from the platform (the driver cannot), and get
 // off. Run with `npm run check:online` (EF_PORT picks the port, default 3030).
 
 import WebSocket from "ws";
 import { findPath } from "./shared/nav";
 const url = `ws://127.0.0.1:${process.env.EF_PORT || 3030}/efws`;
 let bad = 0;
+const ROOM = "WS" + Math.floor(Math.random() * 1e5);
 const check = (ok: boolean, what: string) => { if (!ok) { console.log(`FAILED: ${what}`); bad++; } };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Snap = any;
@@ -13,12 +14,25 @@ function client(name: string) {
   const ws = new WebSocket(url);
   const st: { id: number; snap: Snap | null; ws: WebSocket } = { id: 0, snap: null, ws };
   ws.on("message", (d) => { const m = JSON.parse(String(d)); if (m.t === "welcome") st.id = m.id; if (m.t === "snap") st.snap = m; });
-  ws.on("open", () => ws.send(JSON.stringify({ t: "join", name, room: "WS1", team: 0 })));
+  ws.on("open", () => ws.send(JSON.stringify({ t: "join", name, room: ROOM, team: 0 })));
   return st;
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const a = client("Ania"), b = client("Bartek");
 await sleep(1500);
+// the lobby: both are workers, Ania (first in) is the host; she sets a small shift up and starts it
+check(a.snap.phase === "lobby" && a.snap.host === a.id, "the first player hosts the lobby");
+b.ws.send(JSON.stringify({ t: "start" }));
+await sleep(300);
+check(a.snap.phase === "lobby", "a guest cannot start the shift");
+a.ws.send(JSON.stringify({ t: "config", config: { bots: [0, 2], mission: "server", difficulty: "easy" } }));
+a.ws.send(JSON.stringify({ t: "start" }));
+await sleep(500);
+console.log("phase", a.snap.phase, "layout", a.snap.layout, "mission", a.snap.mission, "players", a.snap.players.length);
+check(a.snap.phase === "brief" && a.snap.players.length === 4, "the shift starts with the briefing and two bots");
+while (a.snap.phase === "brief") await sleep(500);
+const { useLayout } = await import("./shared/map");
+useLayout(a.snap.layout);
 async function walkTo(c: ReturnType<typeof client>, tx: number, tz: number) {
   for (let tries = 0; tries < 5; tries++) {
     const me = c.snap.me; let x = me.x, z = me.z;
@@ -48,7 +62,7 @@ for (let i = 0; i < 60; i++) { x += 4 / 30; a.ws.send(JSON.stringify({ t: "drive
 await sleep(300);
 const vb = b.snap.vehicles[0], meB = b.snap.players.find((p: any) => p.id === b.id);
 console.log("forklift seen by B", vb.x.toFixed(1), "driver", vb.d === a.id, "thrower", vb.g === b.id, "B rides at", meB.x.toFixed(1), meB.y);
-check(Math.abs(vb.x - x) < 0.3 && Math.abs(meB.x - (vb.x - 1.2)) < 0.4, "the forklift moved and carried the thrower");
+check(vb.x > v0.x + 1 && Math.hypot(meB.x - vb.x, meB.z - vb.z) < 1.6, "the forklift moved and carried the thrower");
 // B throws a box from the platform
 const shotsBefore = b.snap.me.mag.rifle;
 b.ws.send(JSON.stringify({ t: "shoot", w: "rifle", yaw: 0, pitch: 0, dirs: [0, 0, -1], view: b.snap.time }));

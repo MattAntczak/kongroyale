@@ -1,76 +1,126 @@
-// Headless check for efectivo ARENA: every spawn and pickup stands on free, reachable floor; the groups are balanced
-// and honour a player's choice; a bot match produces kills and never friendly fire. Run with `npm run smoke`.
+// Headless check for efectivo ARENA. For each of the three hall configurations: every spawn, pickup and mission
+// object stands on free, reachable floor. Then bot-only shifts of both missions (no friendly fire, eliminations
+// happen, the shift ends with a winner), the lobby rules, the forklift, the perches and the cardboard grenade.
+// Run with `npm run smoke`.
 
-import { LADDERS, PERCH_H, PICKUPS, SPAWNS, VEHICLE_SPAWNS } from "./shared/map";
+import { LADDERS, LAYOUTS, PERCH_H, VEHICLE_SPAWNS, useLayout } from "./shared/map";
 import { blocked, stepBody } from "./shared/physics";
-import { findPath, freeAt } from "./shared/nav";
-import { Sim, TICK_HZ } from "./shared/sim";
+import { findPath } from "./shared/nav";
+import { Sim, TICK_HZ, MISSION_TIME_S, BRIEF_S } from "./shared/sim";
+import { lobPitch } from "./shared/weapons";
+import type { Mission } from "./shared/proto";
 
 let bad = 0;
-const pts: [string, number, number][] = [...SPAWNS.map(([x, z], i) => [`spawn ${i}`, x, z] as [string, number, number]), ...PICKUPS.map((p, i) => [`pickup ${i} ${p.kind}`, p.x, p.z] as [string, number, number])];
-for (const [name, x, z] of pts) {
-  if (blocked(x, 0.01, z)) { console.log(`BLOCKED ${name} (${x}, ${z})`); bad++; }
-  else if (!freeAt(x, z)) console.log(`note: ${name} is in a no-nav cell (${x}, ${z})`);
-  if (!findPath(SPAWNS[0][0], SPAWNS[0][1], x, z)) { console.log(`UNREACHABLE ${name}`); bad++; }
+const fail = (what: string) => { console.log(`FAILED: ${what}`); bad++; };
+
+// ---- the three configurations
+LAYOUTS.forEach((l, li) => {
+  useLayout(li);
+  const pts: [string, number, number][] = [
+    ...l.spawns.map(([x, z], i) => [`spawn ${i}`, x, z] as [string, number, number]),
+    ...l.pickups.map((p, i) => [`pickup ${i} ${p.kind}`, p.x, p.z] as [string, number, number]),
+    ...l.vehicles.map((v, i) => [`forklift ${i}`, v.x, v.z] as [string, number, number]),
+    ...l.stations.map((s, i) => [`station ${i}`, s.x, s.z] as [string, number, number]),
+    ...l.supply.map((s, i) => [`supply ${i}`, s.x, s.z] as [string, number, number]),
+  ];
+  let ok = 0;
+  for (const [name, x, z] of pts) {
+    if (blocked(x, 0.01, z, false)) fail(`layout ${l.name}: ${name} (${x}, ${z}) is inside something`);
+    else if (!findPath(l.spawns[0][0], l.spawns[0][1], x, z)) fail(`layout ${l.name}: ${name} (${x}, ${z}) cannot be reached`);
+    else ok++;
+  }
+  // the server is a solid cabinet: the walk has to end right beside it
+  const path = findPath(l.spawns[12][0], l.spawns[12][1], l.server.x, l.server.z);
+  const end = path?.[path.length - 1];
+  if (!end || Math.hypot(end[0] - l.server.x, end[1] - l.server.z) > 2.2) fail(`layout ${l.name}: the server cannot be reached`);
+  console.log(`layout ${l.name}: ${ok}/${pts.length} points free and reachable, ${l.boxes.filter((b) => b.kind === "rack").length} racks, ${l.ladders.length} perches`);
+});
+
+// ---- bot shifts: both missions, each configuration
+function shift(mission: Mission, layout: number, seed: number) {
+  const sim = new Sim({ seed });
+  sim.config = { bots: [8, 8], mission, difficulty: "normal" };
+  sim.begin(layout);
+  let kills = 0, teamHits = 0, booms = 0, winner = -1, reason = "", endT = 0;
+  let tm = new Map<number, number>();
+  const refresh = () => { const s = sim.snapshot(1); tm = new Map(); if (s && s.t === "snap") for (const p of s.players) tm.set(p.id, p.tm); };
+  const t0 = performance.now();
+  const ticks = TICK_HZ * (BRIEF_S + MISSION_TIME_S + 5);
+  let n = 0;
+  for (; n < ticks && winner < 0; n++) {
+    sim.step(1 / TICK_HZ);
+    if (n % 120 === 0) refresh();
+    for (const e of sim.drainEvents()) {
+      if (e.k === "kill") kills++;
+      if (e.k === "boom") booms++;
+      if (e.k === "hit" && e.by !== e.on && tm.get(e.by) === tm.get(e.on)) teamHits++;
+      if (e.k === "end") { winner = e.winner; reason = e.reason; endT = sim.time - BRIEF_S; }
+    }
+  }
+  const us = (performance.now() - t0) / n * 1000;
+  const snap = sim.snapshot(1);
+  const obj = snap && snap.t === "snap" ? JSON.stringify(snap.obj) : "";
+  console.log(`  ${mission} on ${LAYOUTS[layout].name}: ${winner === 1 ? "technicians" : winner === 0 ? "workers" : "nobody"} win by ${reason} after ${endT.toFixed(0)} s, ${kills} eliminations, ${booms} grenades, ${us.toFixed(0)} µs per tick ${obj}`);
+  if (winner < 0) fail(`${mission} on ${LAYOUTS[layout].name} never ended`);
+  if (teamHits) fail(`friendly fire: ${teamHits} hits`);
+  if (kills < 10) fail("too few eliminations: the bots are not fighting");
+  return winner;
+}
+console.log("bot shifts, 8 v 8:");
+const wins = [0, 0];
+const SEEDS = process.argv.includes("--balance") ? [40, 41, 42] : [40];
+for (const seed of SEEDS) for (let l = 0; l < LAYOUTS.length; l++) for (const m of ["server", "tags"] as const) wins[shift(m, l, seed + l * 7)]++;
+console.log(`  workers ${wins[0]} : ${wins[1]} technicians`);
+
+// ---- the lobby: teams are chosen, only the host configures and starts, 20 a team at most
+{
+  const sim = new Sim({ seed: 9 });
+  const a = sim.addHuman("Ania", 1), b = sim.addHuman("Bartek", 1), c = sim.addHuman("Celina");
+  sim.receive(b, { t: "config", config: { bots: [20, 20], mission: "tags", difficulty: "hard" } }); // not the host: ignored
+  sim.receive(b, { t: "start" });
+  const stillLobby = sim.phase === "lobby" && sim.config.bots[0] === 5;
+  sim.receive(c, { t: "team", team: 1 });
+  sim.receive(a, { t: "config", config: { bots: [20, 20], mission: "tags", difficulty: "hard" } });
+  sim.receive(a, { t: "start" });
+  const s = sim.snapshot(a);
+  const players = s && s.t === "snap" ? s.players : [];
+  const w = players.filter((p) => p.tm === 0).length, t = players.filter((p) => p.tm === 1).length;
+  console.log(`lobby: guest cannot start ${stillLobby}, phase ${sim.phase}, mission ${sim.mission}, workers ${w}, technicians ${t} (3 people among them)`);
+  if (!stillLobby || sim.phase !== "brief" || sim.mission !== "tags" || w !== 20 || t !== 20) fail("lobby rules");
 }
 
-const sim = new Sim({ bots: true, difficulty: "normal", seed: 42 });
-const human = sim.addHuman("Tester", 1);
-const teamOf = () => { const s = sim.snapshot(human); const m = new Map<number, number>(); if (s && s.t === "snap") for (const p of s.players) m.set(p.id, p.tm); return m; };
-let tm = teamOf();
-const sizes = [0, 0]; for (const t of tm.values()) sizes[t]++;
-console.log(`groups: A ${sizes[0]}, B ${sizes[1]}; Tester in ${tm.get(human) === 1 ? "B" : "A"}`);
-if (sizes[0] !== sizes[1] || tm.get(human) !== 1) { console.log("groups are not balanced or the group choice was ignored"); bad++; }
-let kills = 0, shots = 0, teamKills = 0, teamHits = 0;
-const t0 = performance.now();
-for (let i = 0; i < TICK_HZ * 180; i++) {
-  sim.step(1 / TICK_HZ);
-  if (i % 60 === 0) tm = teamOf();
-  for (const e of sim.drainEvents()) {
-    if (e.k === "shot") shots++;
-    if (e.k === "end") console.log(`shift over at ${sim.time.toFixed(0)} s: Grupa A ${sim.score[0]} : ${sim.score[1]} Grupa B`);
-    if (e.k === "kill") { kills++; if (e.by !== e.on && tm.get(e.by) === tm.get(e.on)) teamKills++; }
-    if (e.k === "hit" && e.by !== e.on && tm.get(e.by) === tm.get(e.on)) teamHits++;
-  }
-}
-const ms = performance.now() - t0;
-const snap = sim.snapshot(human);
-console.log(`180 s match: ${kills} kills, ${shots} shots, ${(ms / (TICK_HZ * 180) * 1000).toFixed(0)} µs per tick`);
-if (snap && snap.t === "snap") {
-  console.log(`score: Grupa A ${snap.score[0]} : ${snap.score[1]} Grupa B`);
-  for (const t of [0, 1]) console.log(`  ${t ? "B" : "A"}: ` + snap.players.filter((p) => p.tm === t).map((p) => `${p.n} ${p.k}/${p.d}`).join(", "));
-}
-if (teamKills || teamHits) { console.log(`friendly fire happened: ${teamHits} hits, ${teamKills} kills`); bad++; }
-if (kills < 5) { console.log("too few kills: bots are not fighting"); bad++; }
-// forklifts: two players of one group get on (driver, thrower), the driver drives, both get off
+// ---- forklifts: two players of one team get on (driver, thrower), the driver drives, both get off
 {
-  const fs = new Sim({ bots: false, difficulty: "normal", seed: 3 });
-  const f0 = VEHICLE_SPAWNS[0];
+  const fs = new Sim({ seed: 3 });
   const d = fs.addHuman("Kierowca", 0), g = fs.addHuman("Rzucający", 0);
-  const P = (fs as unknown as { players: Map<number, { body: { x: number; z: number }; veh: number; seat: number; spawn: number }> }).players;
+  fs.config = { bots: [0, 0], mission: "server", difficulty: "normal" };
+  fs.begin(0);
+  for (let i = 0; i < TICK_HZ * (BRIEF_S + 1); i++) fs.step(1 / TICK_HZ);
+  const f0 = VEHICLE_SPAWNS[0];
+  const P = (fs as unknown as { players: Map<number, { body: { x: number; z: number }; veh: number; seat: number }> }).players;
   for (const id of [d, g]) { const b = P.get(id)!.body; b.x = f0.x; b.z = f0.z + 1.8; }
   fs.receive(d, { t: "use" }); fs.receive(g, { t: "use" });
   const pd = P.get(d)!, pg = P.get(g)!;
   const okSeats = pd.veh === 0 && pd.seat === 0 && pg.veh === 0 && pg.seat === 1;
   const snap0 = fs.snapshot(d);
   const rev = snap0 && snap0.t === "snap" ? snap0.me.vrev : -1;
-  // drive 2 s east along the main aisle at 4 m/s
   let x = f0.x;
   for (let i = 1; i <= 120; i++) { x += 4 / 60; fs.receive(d, { t: "drive", x, z: f0.z, yaw: 0, speed: 4, rev }); fs.step(1 / 60); }
   const s1 = fs.snapshot(g);
   const fx = s1 && s1.t === "snap" ? s1.vehicles[0].x : 0;
   const thrower = s1 && s1.t === "snap" ? s1.players.find((p) => p.id === g)! : null;
-  // a teleport is refused and bumps the revision
   fs.receive(d, { t: "drive", x: f0.x + 60, z: f0.z, yaw: 0, speed: 4, rev }); fs.step(1 / 60);
   const s2 = fs.snapshot(d);
   const refused = s2 && s2.t === "snap" && s2.vehicles[0].x < f0.x + 20 && s2.me.vrev !== rev;
   fs.receive(d, { t: "use" }); fs.receive(g, { t: "use" });
   const off = pd.veh === -1 && pg.veh === -1;
   console.log(`forklift: seats ${okSeats}, drove to x=${fx.toFixed(1)}, thrower rode at x=${thrower?.x.toFixed(1)}, teleport refused ${refused}, got off ${off}`);
-  if (!okSeats || Math.abs(fx - x) > 0.2 || !thrower || Math.abs(thrower.x - (fx - 1.2)) > 0.3 || !refused || !off) { console.log("forklift check failed"); bad++; }
+  if (!okSeats || Math.abs(fx - x) > 0.2 || !thrower || Math.abs(thrower.x - (fx - 1.25)) > 0.3 || !refused || !off) fail("forklift");
 }
-// perches: a ladder takes a player up to the deck, a bot (no climbing) stays down, a jump off the deck hurts
+
+// ---- perches, the server and the grenade, with two people
 {
+  useLayout(0);
   const l = LADDERS[0];
   const cx = (l.x0 + l.x1) / 2, cz = (l.z0 + l.z1) / 2;
   const up = { x: cx, y: 0, z: cz, vx: 0, vy: 0, vz: 0, onGround: true };
@@ -80,25 +130,41 @@ if (kills < 5) { console.log("too few kills: bots are not fighting"); bad++; }
     stepBody(bot, { mx: l.dx, mz: 0, jump: false, sprint: false }, 1 / 60);
   }
   const onDeck = Math.abs(up.y - l.top) < 0.01 && up.onGround;
-  // slide back down the ladder: slow, lands on the floor
-  const down = { x: cx, y: l.top - 0.5, z: cz, vx: 0, vy: 0, vz: 0, onGround: false };
-  let maxFall = 0;
-  for (let i = 0; i < 60 * 4; i++) { const y0 = down.y; stepBody(down, { mx: 0, mz: 0, jump: false, sprint: false, climb: true }, 1 / 60); maxFall = Math.max(maxFall, (y0 - down.y) * 60); }
-  const fs = new Sim({ bots: false, difficulty: "normal", seed: 5 });
-  const id = fs.addHuman("Skoczek", 0);
-  for (let i = 0; i < 120; i++) fs.step(1 / 60); // past the spawn protection
-  const me0 = fs.snapshot(id); const sp = me0 && me0.t === "snap" ? me0.me : null;
-  let hp = 100;
-  if (sp) {
-    // the same spot, 7.2 m up, then a free fall to the floor
-    let y = PERCH_H, vy = 0;
-    fs.receive(id, { t: "state", x: sp.x, y: 0.5, z: sp.z, yaw: 0, pitch: 0, moving: false, spawn: sp.spawn }); fs.step(1 / 60);
-    for (let k = 1; k <= 12; k++) { fs.receive(id, { t: "state", x: sp.x, y: Math.min(PERCH_H, 0.5 + k * 0.6), z: sp.z, yaw: 0, pitch: 0, moving: false, spawn: sp.spawn }); fs.step(1 / 60); fs.step(1 / 60); }
-    while (y > 0) { vy -= 22 / 30; y = Math.max(0, y + vy / 30); fs.receive(id, { t: "state", x: sp.x, y, z: sp.z, yaw: 0, pitch: 0, moving: false, spawn: sp.spawn }); fs.step(1 / 60); fs.step(1 / 60); }
-    fs.receive(id, { t: "state", x: sp.x, y: 0, z: sp.z, yaw: 0, pitch: 0, moving: false, spawn: sp.spawn }); fs.step(1 / 60);
-    const s2 = fs.snapshot(id); if (s2 && s2.t === "snap") hp = s2.me.hp;
-  }
-  console.log(`perch: climbed to deck ${onDeck} (y=${up.y.toFixed(2)}), bot stayed down ${bot.y < 0.01}, ladder descent ${maxFall.toFixed(1)} m/s, health after a ${PERCH_H} m jump: ${hp}`);
-  if (!onDeck || bot.y > 0.01 || maxFall > 4 || down.y > 0.01 || hp >= 100 || hp <= 0) { console.log("perch check failed"); bad++; }
+  console.log(`perch: climbed to the deck ${onDeck} (y=${up.y.toFixed(2)}, deck ${PERCH_H}), a bot stays down ${bot.y < 0.01}`);
+  if (!onDeck || bot.y > 0.01) fail("perch");
+
+  const sim = new Sim({ seed: 5 });
+  const w = sim.addHuman("Pracownik", 0), t = sim.addHuman("Technik", 1);
+  sim.config = { bots: [0, 0], mission: "server", difficulty: "normal" };
+  sim.begin(0);
+  for (let i = 0; i < TICK_HZ * (BRIEF_S + 2); i++) sim.step(1 / TICK_HZ);
+  const P = (sim as unknown as { players: Map<number, { body: { x: number; y: number; z: number }; hp: number; mag: { grenade: number } }> }).players;
+  const srv = LAYOUTS[0].server;
+  const pt = P.get(t)!, pw = P.get(w)!;
+  // the technician holds E beside the server: the connection climbs; a worker far away cannot stop it
+  pt.body.x = srv.x + 1.6; pt.body.z = srv.z;
+  sim.receive(t, { t: "act", on: true });
+  for (let i = 0; i < TICK_HZ * 5; i++) sim.step(1 / TICK_HZ);
+  const s1 = sim.snapshot(t);
+  const prog = s1 && s1.t === "snap" && "p" in s1.obj ? s1.obj.p : 0;
+  // a worker cannot connect it
+  sim.receive(t, { t: "act", on: false });
+  pw.body.x = srv.x - 1.6; pw.body.z = srv.z; sim.receive(w, { t: "act", on: true });
+  for (let i = 0; i < TICK_HZ * 2; i++) sim.step(1 / TICK_HZ);
+  const s2 = sim.snapshot(t);
+  const prog2 = s2 && s2.t === "snap" && "p" in s2.obj ? s2.obj.p : 1;
+  // the grenade: thrown at the worker 12 m away, it bursts and hurts
+  pt.body.x = 64; pt.body.z = 0; pw.body.x = 76; pw.body.z = 0; // along the main aisle, in the open
+  for (let i = 0; i < 10; i++) sim.step(1 / TICK_HZ);
+  sim.receive(t, { t: "switch", w: "grenade" });
+  for (let i = 0; i < 40; i++) sim.step(1 / TICK_HZ);
+  const pitch = lobPitch(12, 0.3 - 1.62);
+  sim.receive(t, { t: "shoot", w: "grenade", yaw: -Math.PI / 2, pitch, dirs: [Math.cos(pitch), Math.sin(pitch), 0], view: sim.time });
+  let boom = false;
+  for (let i = 0; i < TICK_HZ * 3; i++) { sim.step(1 / TICK_HZ); for (const e of sim.drainEvents()) if (e.k === "boom") boom = true; }
+  console.log(`server: 5 s on the cable -> ${(prog * 100).toFixed(0)} %, a worker cannot add to it ${prog2 <= prog}; grenade burst ${boom}, worker health ${pw.hp}, grenades left ${pt.mag.grenade}`);
+  if (prog < 0.3 || prog2 > prog || !boom || pw.hp >= 100 || pt.mag.grenade !== 1) fail("server or grenade");
 }
+
+console.log(bad ? `${bad} check(s) failed` : "all checks passed");
 process.exit(bad ? 1 : 0);

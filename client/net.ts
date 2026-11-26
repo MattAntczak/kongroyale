@@ -1,8 +1,8 @@
-// The client's link to a host. A bot match runs the Sim right here in the page (LocalLink); an online room talks to
+// The client's link to a host. A game with bots runs the Sim right here in the page (LocalLink); an online room talks to
 // server.ts over a WebSocket (WsLink). The game only ever sees the Link interface, so both behave the same.
 
-import { Sim, TEAM_FRAG_LIMIT, TICK_HZ } from "../shared/sim";
-import type { ClientMsg, Difficulty, HostMsg } from "../shared/proto";
+import { Sim, TICK_HZ } from "../shared/sim";
+import type { ClientMsg, HostMsg } from "../shared/proto";
 
 export interface Link {
   send(m: ClientMsg): void;
@@ -21,11 +21,11 @@ export class LocalLink implements Link {
   private acc = 0;
   private tick = 0;
 
-  /** `players` is the whole room (both groups); `team` 0 / 1 picks Grupa A / B, -1 lets the host choose. */
-  constructor(name: string, difficulty: Difficulty, players: number, team: number) {
-    this.sim = new Sim({ bots: true, difficulty, seed: (Math.random() * 2 ** 31) | 0, maxPlayers: players });
+  /** A room of our own: we are its host, in the lobby, and the bots join when the shift starts. */
+  constructor(name: string, team: number) {
+    this.sim = new Sim({ seed: (Math.random() * 2 ** 31) | 0 });
     this.id = this.sim.addHuman(name, team);
-    queueMicrotask(() => this.onMessage({ t: "welcome", id: this.id, room: "LOKALNY", fragLimit: TEAM_FRAG_LIMIT }));
+    queueMicrotask(() => this.onMessage({ t: "welcome", id: this.id, room: "LOKALNY" }));
     this.timer = window.setInterval(() => this.run(), 4);
   }
 
