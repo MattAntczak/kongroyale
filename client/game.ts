@@ -13,7 +13,7 @@ import type { Box } from "../shared/map";
 import { buildWorld, forkliftModel, type WorldHandle } from "./world";
 import { Human, TEAM_COLORS, TEAM_CSS, gunModel } from "./human";
 import { ROUNDS_WIN, SITE_R, TEAM_NAMES, TEAM_SHORT } from "../shared/sim";
-import { sites, useLayout, LAYOUTS } from "../shared/map";
+import { sites, useLayout, HALL, LAYOUTS } from "../shared/map";
 import { STORIES } from "./story";
 import { Fx } from "./fx";
 import { drawMinimap } from "./minimap";
@@ -112,6 +112,32 @@ export class Game {
   private hudCache: Record<string, string> = {};
   private disposers: (() => void)[] = [];
 
+  /** A prefiltered environment map of a generic warehouse interior: pale floor, grey-blue walls, a dim roof with
+   *  bright lamp strips (cool ones over the far end in the depot, for the cold store). 20 unlit meshes rendered once. */
+  private static roomEnvironment(renderer: THREE.WebGLRenderer, depot: boolean): THREE.WebGLRenderTarget {
+    const room = new THREE.Scene();
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const mats: THREE.MeshBasicMaterial[] = [];
+    // colours above 1 are fine: the PMREM target is half-float and the lamps should give highlights
+    const slab = (r: number, g: number, b: number, x: number, y: number, z: number, sx: number, sy: number, sz: number) => {
+      const mat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }); mat.color.setRGB(r, g, b); mats.push(mat);
+      const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.scale.set(sx, sy, sz); room.add(m);
+    };
+    slab(0.5, 0.48, 0.45, 0, -4, 0, 40, 0.2, 40); // concrete floor
+    slab(0.1, 0.11, 0.13, 0, 4, 0, 40, 0.2, 40); // roof
+    slab(0.3, 0.33, 0.38, -20, 0, 0, 0.2, 8, 40); slab(0.3, 0.33, 0.38, 20, 0, 0, 0.2, 8, 40); // walls
+    slab(0.26, 0.29, 0.34, 0, 0, -20, 40, 8, 0.2); slab(0.34, 0.36, 0.4, 0, 0, 20, 40, 8, 0.2);
+    for (let i = 0; i < 12; i++) {
+      const x = (i % 4) * 9 - 13.5, z = Math.floor(i / 4) * 12 - 12, cool = depot && i % 4 === 3;
+      slab(cool ? 7 : 9, cool ? 9 : 8.6, cool ? 12 : 7.8, x, 3.8, z, 3.2, 0.05, 0.6);
+    }
+    slab(1.6, 1.7, 2.0, 0, 1, 19.8, 9, 5, 0.1); // an open dock door: a soft, large highlight for glossy things
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const rt = pmrem.fromScene(room, 0.03, 0.1, 100);
+    pmrem.dispose(); geo.dispose(); for (const m of mats) m.dispose();
+    return rt;
+  }
+
   /** `first` is the snapshot that told us a shift is on: it names the hall configuration and the mission. */
   constructor(private link: Link, myId: number, room: string, first: Extract<HostMsg, { t: "snap" }>, private onQuit: (msg?: string) => void) {
     this.myId = myId; this.room = room;
@@ -120,29 +146,63 @@ export class Game {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
     this.renderer.shadowMap.enabled = true;
+    // three r186 folded the soft filter into PCFShadowMap (PCFSoftShadowMap only warns now); shadow.radius below sets the blur
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.15;
     this.renderer.autoClear = false;
     this.camera = new THREE.PerspectiveCamera(this.settings.fov, 1, 0.05, 700);
-    this.scene.background = new THREE.Color(0x07070a);
-    this.scene.fog = new THREE.Fog(0x07070a, 90, 460);
 
-    // light: a cool sky fill, a key from the roof lights with shadows, a few warm points down the hall
+    // light: image-based fill from a tiny hand-built room, a sky/floor-bounce hemisphere, one shadowed key from the
+    // roof lights and six shadowless points. That is 8 lights per fragment, the same count as before.
     const depot = LAYOUTS[first.layout].kind === "depot";
-    this.scene.add(new THREE.HemisphereLight(0xdfe4ff, depot ? 0x4a4640 : 0x2a2622, depot ? 2.1 : 1.25));
-    const key = new THREE.DirectionalLight(0xffffff, 1.6);
-    // in the depot the light falls almost straight down, so the walls between the rooms do not shade the floors
-    if (depot) key.position.set(-8, 120, 6); else key.position.set(-60, 120, 40);
+    // haze instead of black: far things fade into a dim blue-grey, which reads as depth; the far wall of the
+    // longest sightline (184 m depot, ~610 m hall diagonal) keeps roughly two thirds / one third of its contrast
+    const haze = depot ? 0x3a424e : 0x363d48;
+    this.scene.background = new THREE.Color(haze);
+    this.scene.fog = depot ? new THREE.Fog(haze, 45, 560) : new THREE.Fog(haze, 90, 860);
+    // environment map: without one every metallic material (cladding, racks, trusses, forks) loses its specular
+    // half and renders near-black. Rendered once at start-up into a small PMREM atlas; no per-frame cost.
+    const env = Game.roomEnvironment(this.renderer, depot);
+    this.scene.environment = env.texture; this.scene.environmentIntensity = depot ? 0.75 : 0.85;
+    this.vmScene.environment = env.texture; this.vmScene.environmentIntensity = 0.9;
+    this.disposers.push(() => env.dispose());
+    // the ground colour is the bounce off the pale concrete floor: it is what lights walls from below and the ceiling
+    this.scene.add(new THREE.HemisphereLight(0xe6ebff, depot ? 0x8f887c : 0x7d776d, depot ? 1.5 : 1.35));
+    const key = new THREE.DirectionalLight(0xfff6e8, depot ? 1.9 : 2.1);
+    // in the depot the light is steep but not vertical: a person throws a half-metre shadow and a pallet stack a
+    // visible one, which is what makes things stand on the floor instead of floating over it. The walls between the
+    // rooms do not cast (see world.ts), so they shade no floors.
+    // (only the direction matters; the hall's light sits far out so that no corner of the 540 m hall is behind it)
+    if (depot) key.position.set(-30, 120, 20); else key.position.set(-180, 360, 120);
     key.castShadow = true;
     key.shadow.mapSize.set(4096, 4096);
-    Object.assign(key.shadow.camera, depot ? { left: -100, right: 100, top: 70, bottom: -70, near: 1, far: 320 } : { left: -285, right: 285, top: 160, bottom: -160, near: 1, far: 320 });
-    key.shadow.bias = -0.0006;
-    key.shadow.normalBias = 0.03;
+    // Fit the shadow camera to the building. With `up` along -z its axes line up with the hall's (the default +y up
+    // turns the frustum by the light's heading, which left the corners of both maps without shadows), and tight
+    // near/far planes keep the depth precision, so the bias can be centimetres instead of the old ~20 cm.
+    const sc = key.shadow.camera;
+    sc.up.set(0, 0, -1);
+    const view = new THREE.Matrix4().lookAt(key.position, key.target.position, sc.up).setPosition(key.position).invert();
+    const lo = new THREE.Vector3(Infinity, Infinity, Infinity), hi = new THREE.Vector3(-Infinity, -Infinity, -Infinity), c = new THREE.Vector3();
+    for (let i = 0; i < 8; i++) {
+      c.set(i & 1 ? HALL.x1 : HALL.x0, i & 2 ? HALL.h + 1 : 0, i & 4 ? HALL.z1 : HALL.z0).applyMatrix4(view);
+      lo.min(c); hi.max(c);
+    }
+    sc.left = lo.x - 2; sc.right = hi.x + 2; sc.bottom = lo.y - 2; sc.top = hi.y + 2; sc.near = Math.max(1, -hi.z - 2); sc.far = -lo.z + 2;
+    sc.updateProjectionMatrix();
+    // bias is in units of the depth range: about 1.5 cm of depth plus a normal offset of about one shadow texel
+    key.shadow.bias = -0.015 / (sc.far - sc.near);
+    key.shadow.normalBias = 0.7 * (sc.right - sc.left) / 4096;
+    key.shadow.radius = depot ? 2.5 : 1.5;
     this.scene.add(key);
-    const points = depot ? [[-64, -27], [-64, 11], [-4, -4], [51, 2], [0, 46], [50, -23]] : [[-200, 0], [-100, 0], [0, -60], [0, 60], [100, 0], [200, 0]];
-    for (const [x, z] of points) {
-      const p = new THREE.PointLight(0xfff1dc, depot ? 60 : 80, 70, 1.6); p.position.set(x, depot ? 6.8 : 9.5, z); this.scene.add(p);
+    // depot: one lamp per room (A bay, containers, central hall, cold store B, docks, packing); the cold store is blue-white
+    const points: [number, number, number][] = depot
+      ? [[-64, -27, 0xffe9c8], [-64, 11, 0xffe2b8], [-4, -4, 0xfff1dc], [51, 2, 0xbfdcff], [0, 46, 0xffe6c0], [50, -23, 0xfff4e6]]
+      : [[-200, 0, 0xfff1dc], [-100, 0, 0xfff1dc], [0, -60, 0xfff1dc], [0, 60, 0xfff1dc], [100, 0, 0xfff1dc], [200, 0, 0xfff1dc]];
+    for (const [x, z, col] of points) {
+      // decay 1.4 and a long range: a broad pool that still reaches the walls of its room, cut off before the next one
+      const p = new THREE.PointLight(col, depot ? 45 : 80, depot ? 60 : 110, 1.4); p.position.set(x, depot ? 6.6 : 9.5, z); this.scene.add(p);
     }
     this.world = buildWorld(this.scene, first.mission);
     const caseMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.3, metalness: 0.5, emissive: 0x474fff, emissiveIntensity: 0.25 });
@@ -150,8 +210,11 @@ export class Game {
     this.fx = new Fx(this.scene, this.boxHit);
 
     // first-person view model
-    this.vmScene.add(new THREE.HemisphereLight(0xdfe4ff, 0x2a2622, 1.6));
-    const vk = new THREE.DirectionalLight(0xffffff, 1.4); vk.position.set(1, 2, 1); this.vmScene.add(vk);
+    // lit like the hall (same environment map, same hemisphere and key colours) so the hands do not look pasted on
+    this.vmScene.add(new THREE.HemisphereLight(0xe6ebff, 0x8f887c, 1.1));
+    const vk = new THREE.DirectionalLight(0xfff6e8, 1.7); vk.position.set(1, 2.4, 1.2); this.vmScene.add(vk);
+    // a weak cool rim from behind-left separates the dark weapon from dark walls
+    const vr = new THREE.DirectionalLight(0xaec4ff, 0.6); vr.position.set(-1.5, 0.6, -1); this.vmScene.add(vr);
     this.vmScene.add(this.vm);
     const sleeve = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.4), this.sleeveMat); sleeve.position.set(0.05, -0.06, 0.2); this.vm.add(sleeve);
     const hand = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.07, 0.08), new THREE.MeshStandardMaterial({ color: 0xe0b08c, roughness: 0.7 })); hand.position.set(0.015, -0.055, 0.03); this.vm.add(hand);
@@ -887,9 +950,25 @@ export class Game {
     this.disposed = true; this.quitting = true;
     cancelAnimationFrame(this.raf);
     for (const d of this.disposers) d();
+    // Every match builds its own renderer on the same canvas, so the same WebGL context: what this match put on the
+    // GPU (the floor and wall textures, the atlases, the 4096 px shadow map) stays there until it is freed here.
+    // Shared, module-level geometry and materials (characters, launchers, forklifts) are freed too: three.js uploads
+    // them again when the next match first draws them.
+    for (const root of [this.scene, this.vmScene]) root.traverse((o) => {
+      if (o instanceof THREE.Light) { o.dispose(); return; }
+      if (o instanceof THREE.InstancedMesh) o.dispose();
+      const m = o as THREE.Mesh;
+      m.geometry?.dispose();
+      for (const mat of Array.isArray(m.material) ? m.material : m.material ? [m.material] : []) {
+        for (const v of Object.values(mat)) if (v instanceof THREE.Texture) v.dispose();
+        mat.dispose();
+      }
+    });
     if (document.pointerLockElement) document.exitPointerLock();
     for (const id of ["hud", "pause", "board", "end", "death", "brief", "scope"]) $(id).hidden = true;
     $("feed").innerHTML = ""; $("chat").innerHTML = "";
+    // back to the context's defaults (texture flipping above all), which the next match's renderer takes for granted
+    this.renderer.resetState();
     this.renderer.dispose();
   }
 
