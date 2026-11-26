@@ -52,7 +52,7 @@ if (new URLSearchParams(location.search).has("hala")) {
   for (const c of $("modeRow").querySelectorAll<HTMLButtonElement>("button")) c.setAttribute("aria-pressed", String(c.dataset.mode === "online"));
 }
 syncMode();
-$("howBtn").addEventListener("click", () => $("how").scrollIntoView({ behavior: "smooth" }));
+$("howBtn").addEventListener("click", () => { const how = $("how"); how.hidden = !how.hidden; if (!how.hidden) how.scrollIntoView({ behavior: "smooth" }); });
 
 $("play").addEventListener("click", () => {
   initAudio();

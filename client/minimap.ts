@@ -25,8 +25,6 @@ function drawBase(): HTMLCanvasElement {
     g.fillStyle = b.kind === "rack" ? "#cbd5e1" : b.kind === "column" ? "#94a3b8" : "#e2e8f0";
     g.fillRect(X(b.x0), Z(b.z0), (b.x1 - b.x0) * sx, (b.z1 - b.z0) * sz);
   }
-  g.font = "600 13px Inter, system-ui, sans-serif"; g.fillStyle = "#64748b";
-  for (const zn of ZONES) g.fillText(zn.name.replace("STREFA ", ""), X(zn.x0) + 6, Z(zn.z0) + 16);
   return c;
 }
 

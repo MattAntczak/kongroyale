@@ -54,6 +54,8 @@ export class Game {
   private latest: Extract<HostMsg, { t: "snap" }> | null = null;
   private names = new Map<number, PlayerSnap>();
   private myId = 0;
+  private boardT = 0;
+  private rideT = 0;
   /** The forklift we ride (-1 on foot), our seat, and, when we drive it, our predicted pose of it. */
   private veh = -1; private seat = 0; private vrev = -1;
   private drive: VehicleState = { x: 0, z: 0, yaw: 0, speed: 0 };
@@ -354,8 +356,8 @@ export class Game {
       const v = m.vehicles.find((q) => q.id === me.veh);
       const newlyDriving = me.veh >= 0 && me.seat === 0 && (this.veh !== me.veh || this.seat !== 0);
       if (v) { this.drive.x = v.x; this.drive.z = v.z; this.drive.yaw = v.yaw; this.drive.speed = newlyDriving ? 0 : v.speed; }
-      if (newlyDriving) { this.camOffset = 0; this.toast("Jedziesz: W/S gaz i wsteczny, A/D skręt, E wysiada"); }
-      else if (me.veh >= 0 && me.seat === 1 && this.veh !== me.veh) this.toast("Rzucasz z wózka · E wysiada");
+      if (newlyDriving) this.camOffset = 0;
+      if (me.veh !== this.veh) this.rideT = now;
       this.veh = me.veh; this.seat = me.seat; this.vrev = me.vrev;
     }
     if (this.myTeam !== me.team) {
@@ -396,7 +398,7 @@ export class Game {
           $("hitmark").className = e.head ? "on head" : "on";
           sfx.hitMarker(e.head);
         }
-        this.fx.bits(e.x, e.y, e.z, 8);
+        this.fx.bits(e.x, e.y, e.z, 5);
         if (e.on === this.myId) { this.hurtT = 0.6; sfx.hurt(); this.shake = Math.min(1, this.shake + 0.4); }
         break;
       case "kill": {
@@ -427,12 +429,12 @@ export class Game {
 
   private feed(html: string, mine: boolean) {
     const el = document.createElement("div");
-    el.className = "glass" + (mine ? " mine" : "");
+    el.className = mine ? "mine" : "";
     el.innerHTML = html;
     const f = $("feed");
     f.prepend(el);
-    while (f.children.length > 5) f.lastElementChild!.remove();
-    setTimeout(() => el.remove(), 6000);
+    while (f.children.length > 3) f.lastElementChild!.remove();
+    setTimeout(() => el.remove(), 4000);
   }
 
   private chat(name: string, text: string) {
@@ -668,22 +670,21 @@ export class Game {
     const m = this.latest;
     if (!m) return;
     const left = Math.ceil(m.left);
-    this.set("timer", `${String(Math.floor(left / 60)).padStart(2, "0")}:${String(left % 60).padStart(2, "0")}`);
-    const me = this.names.get(this.myId);
+    const clock = `${String(Math.floor(left / 60)).padStart(2, "0")}:${String(left % 60).padStart(2, "0")}`;
     const sc = m.score, mt = this.myTeam & 1;
-    this.set("score", `<div class="${mt === 0 ? "me" : ""}"><i class="tdot" style="background:${TEAM_CSS[0]}"></i>${TEAM_NAMES[0]} <b>${sc[0]}</b></div><div class="${mt === 1 ? "me" : ""}"><i class="tdot" style="background:${TEAM_CSS[1]}"></i>${TEAM_NAMES[1]} <b>${sc[1]}</b></div><div>Ty <b>${me?.k ?? 0}</b> · do <b>${TEAM_FRAG_LIMIT}</b></div>`, true);
+    this.set("score", `<span class="${mt === 0 ? "me" : ""}"><i style="background:${TEAM_CSS[0]}"></i>${sc[0]}</span><time>${clock}</time><span class="${mt === 1 ? "me" : ""}">${sc[1]}<i style="background:${TEAM_CSS[1]}"></i></span>`, true);
+    if (!$("board").hidden && nowS - this.boardT > 0.5) { this.boardT = nowS; $("boardTable").innerHTML = this.boardHtml(); }
     const hp = Math.max(0, m.me.hp);
     this.set("hp", String(hp));
     ($("hpbar").firstElementChild as HTMLElement).style.width = hp + "%";
     $("hpbar").classList.toggle("low", hp <= 35);
     const w = WEAPONS[this.w];
-    this.set("wname", w.name);
+    this.set("wname", this.reloadUntil ? "Przeładowanie…" : w.name);
     this.set("mag", String(this.mag[this.w]));
     this.set("res", this.res[this.w] >= 900 ? "/ ∞" : `/ ${this.res[this.w]}`);
-    this.set("weps", WEAPON_ORDER.map((id, i) => `<span class="${id === this.w ? "on" : this.owned.has(id) ? "" : "off"}">${i + 1} ${WEAPONS[id].name}</span>`).join(""), true);
-    $("reloadHint").hidden = !this.reloadUntil;
     const use = this.usable();
-    const prompt = this.veh >= 0 && m.me.alive ? (this.seat === 0 ? "Wysiądź z wózka" : "Zejdź z wózka") : use ? (use.seat === 0 ? "Wsiądź do wózka jako kierowca" : "Wskocz na wózek jako rzucający") : "";
+    // on board the prompt shows only for the first seconds: the ride itself needs no label
+    const prompt = this.veh >= 0 && m.me.alive ? (nowS - this.rideT < 4 ? "Wysiądź" : "") : use ? (use.seat === 0 ? "Prowadź wózek" : "Wskocz na wózek") : "";
     $("usePrompt").hidden = !prompt;
     if (prompt) this.set("usePromptText", prompt);
     // crosshair opens with spread

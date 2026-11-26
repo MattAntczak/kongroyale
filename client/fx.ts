@@ -48,7 +48,10 @@ export class Fx {
     scene.add(this.boxMesh);
     this.bitGeo.setAttribute("position", new THREE.BufferAttribute(this.bitPos, 3));
     this.bitGeo.setAttribute("color", new THREE.BufferAttribute(this.bitCol, 3));
-    const pts = new THREE.Points(this.bitGeo, new THREE.PointsMaterial({ size: 0.07, vertexColors: true }));
+    const bitMat = new THREE.PointsMaterial({ size: 0.06, vertexColors: true });
+    // a scrap right in front of the camera would fill the screen: cap its size in pixels
+    bitMat.onBeforeCompile = (sh) => { sh.vertexShader = sh.vertexShader.replace("#include <fog_vertex>", "#include <fog_vertex>\n  gl_PointSize = min(gl_PointSize, 9.0);"); };
+    const pts = new THREE.Points(this.bitGeo, bitMat);
     pts.frustumCulled = false;
     this.bitPos.fill(-100);
     scene.add(pts);
@@ -102,7 +105,7 @@ export class Fx {
       const hit = this.hitTest(this.bx[o], this.bx[o + 1], this.bx[o + 2], dx, dy, dz, seg, this.bteam[i], this.bowner[i]);
       this.bx[o] += dx * hit.t; this.bx[o + 1] += dy * hit.t; this.bx[o + 2] += dz * hit.t;
       if (hit.t < seg || this.bage[i] > BOX_LIFE_S) {
-        if (hit.t < seg) this.bits(this.bx[o], this.bx[o + 1], this.bx[o + 2], hit.player ? 10 : 6);
+        if (hit.t < seg) this.bits(this.bx[o], this.bx[o + 1], this.bx[o + 2], hit.player ? 6 : 4);
         this.bage[i] = -1; this.hide(i); continue;
       }
       for (let k = 0; k < 3; k++) this.brot[o + k] += this.bspin[o + k] * dt;
