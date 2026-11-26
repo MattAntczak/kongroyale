@@ -1,9 +1,9 @@
-// Floor navigation for bots: a 0.5 m occupancy grid over the hall, A* with 8-way moves and string-pulling so paths
+// Floor navigation for bots: a 1 m occupancy grid over the hall, A* with 8-way moves and string-pulling so paths
 // cut corners instead of zig-zagging cell to cell.
 
 import { BOXES, HALL } from "./map";
 
-export const CELL = 0.5;
+export const CELL = 1;
 const CLEAR = 0.5; // how far a bot keeps its centre from any obstacle
 export const GW = Math.round((HALL.x1 - HALL.x0) / CELL);
 export const GH = Math.round((HALL.z1 - HALL.z0) / CELL);
@@ -32,7 +32,7 @@ const centre = (i: number, j: number): [number, number] => [HALL.x0 + (i + 0.5) 
 /** True when a straight walk between two points crosses only free cells. */
 export function walkable(ax: number, az: number, bx: number, bz: number): boolean {
   const d = Math.hypot(bx - ax, bz - az);
-  const n = Math.ceil(d / (CELL * 0.5));
+  const n = Math.ceil(d / (CELL * 0.4));
   for (let s = 0; s <= n; s++) {
     const t = n === 0 ? 0 : s / n;
     if (!freeAt(ax + (bx - ax) * t, az + (bz - az) * t)) return false;
@@ -96,7 +96,7 @@ export function findPath(ax: number, az: number, bx: number, bz: number): [numbe
   stamp[si] = curStamp; gScore[si] = 0; came[si] = -1;
   push(0, si);
   let found = false, iters = 0;
-  while (heapF.length && iters++ < 20000) {
+  while (heapF.length && iters++ < GW * GH) {
     const cur = pop();
     if (cur === gi) { found = true; break; }
     if (closedStamp[cur] === curStamp) continue;

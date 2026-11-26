@@ -1,7 +1,7 @@
 // Movement, collision and ray tests for efectivo ARENA. Shared by the browser (own-player prediction, tracers) and the
 // game host (bots, validation, hit tests), so both see the same walls.
 
-import { BOXES, HALL, type Box } from "./map";
+import { BOXES, HALL, LADDERS, type Box, type Ladder } from "./map";
 
 export const PLAYER_R = 0.35;
 export const PLAYER_H = 1.75;
@@ -12,6 +12,8 @@ export const JUMP_V = 7.6;
 export const WALK_SPEED = 5.2;
 export const SPRINT_SPEED = 7.6;
 export const STEP_H = 0.45;
+/** Speed up and down a ladder (m/s). Coming down is slow enough to be safe. */
+export const CLIMB_SPEED = 3.4;
 
 export interface Body {
   x: number; y: number; z: number;
@@ -24,6 +26,14 @@ export interface MoveInput {
   mx: number; mz: number;
   jump: boolean;
   sprint: boolean;
+  /** Use ladders: push toward the rack to climb. Bots leave this off and stay on the floor. */
+  climb?: boolean;
+}
+
+/** The ladder whose zone holds a player at (x, y, z), if any. */
+export function ladderAt(x: number, y: number, z: number): Ladder | null {
+  for (const l of LADDERS) if (x > l.x0 - 0.1 && x < l.x1 + 0.1 && z > l.z0 && z < l.z1 && y < l.top + 0.05) return l;
+  return null;
 }
 
 /** Moving obstacles (the forklifts), refreshed every tick by whoever runs the world. */
@@ -67,7 +77,11 @@ export function stepBody(p: Body, inp: MoveInput, dt: number) {
   p.vx += (mx * speed - p.vx) * k;
   p.vz += (mz * speed - p.vz) * k;
   if (inp.jump && p.onGround) { p.vy = JUMP_V; p.onGround = false; }
-  p.vy -= GRAVITY * dt;
+  // ladders: pushing toward the rack climbs; letting go slides down the rails at a safe speed
+  const lad = inp.climb ? ladderAt(p.x, p.y, p.z) : null;
+  if (lad && mx * lad.dx > 0.3) { p.vy = CLIMB_SPEED; p.onGround = false; }
+  else if (lad && !p.onGround && !inp.jump) { p.vy = -CLIMB_SPEED; p.vx = 0; p.vz = 0; }
+  else p.vy -= GRAVITY * dt;
 
   moveAxis(p, 0, p.vx * dt);
   moveAxis(p, 2, p.vz * dt);

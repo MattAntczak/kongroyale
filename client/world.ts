@@ -3,7 +3,7 @@
 // pickups. Every texture is drawn on a canvas at start-up, so the hall needs no downloaded assets.
 
 import * as THREE from "three";
-import { ANCHORS, BOXES, DOCKS, HALL, PICKUPS, ZONES, type Box, type PickupKind } from "../shared/map";
+import { ANCHORS, BOXES, DOCKS, HALL, LADDERS, PICKUPS, ZONES, type PickupKind } from "../shared/map";
 import { gunModel } from "./human";
 
 const ACCENT = 0x474fff;
@@ -30,7 +30,7 @@ function noise(g: CanvasRenderingContext2D, w: number, h: number, amount: number
 // ------------------------------------------------------------------ floor
 
 function floorTexture() {
-  const PX = 24; // pixels per metre
+  const PX = 16; // pixels per metre
   const W = (HALL.x1 - HALL.x0) * PX, H = (HALL.z1 - HALL.z0) * PX;
   const X = (x: number) => (x - HALL.x0) * PX, Z = (z: number) => (z - HALL.z0) * PX;
   return canvasTex(W, H, (g) => {
@@ -71,16 +71,16 @@ function floorTexture() {
     }
     // walkway arrows along the main aisle
     g.fillStyle = "rgba(245,245,247,0.55)";
-    for (let x = -36; x < 36; x += 8) {
-      g.save(); g.translate(X(x), Z(0)); g.beginPath(); g.moveTo(-18, -10); g.lineTo(6, -10); g.lineTo(6, -20); g.lineTo(26, 0); g.lineTo(6, 20); g.lineTo(6, 10); g.lineTo(-18, 10); g.closePath(); g.fill(); g.restore();
+    for (let x = HALL.x0 + 8; x < HALL.x1 - 4; x += 12) {
+      g.save(); g.translate(X(x), Z(0)); g.scale(PX / 16, PX / 16); g.beginPath(); g.moveTo(-18, -10); g.lineTo(6, -10); g.lineTo(6, -20); g.lineTo(26, 0); g.lineTo(6, 20); g.lineTo(6, 10); g.lineTo(-18, 10); g.closePath(); g.fill(); g.restore();
     }
     g.strokeStyle = "rgba(245,245,247,0.5)"; g.setLineDash([0.9 * PX, 0.6 * PX]); g.lineWidth = 0.1 * PX;
-    for (const z of [-4.2, 4.2]) { g.beginPath(); g.moveTo(X(-40), Z(z)); g.lineTo(X(40), Z(z)); g.stroke(); }
+    for (const z of [-4.2, 4.2]) { g.beginPath(); g.moveTo(X(HALL.x0), Z(z)); g.lineTo(X(HALL.x1), Z(z)); g.stroke(); }
     g.setLineDash([]);
     // zone names
     g.textAlign = "left"; g.textBaseline = "top";
     for (const zn of ZONES) {
-      g.font = `600 ${Math.round(0.9 * PX)}px Inter, -apple-system, sans-serif`;
+      g.font = `600 ${Math.round(2.2 * PX)}px Inter, -apple-system, sans-serif`;
       g.fillStyle = "rgba(245,245,247,0.32)";
       const tx = X(zn.x0) + 0.8 * PX, tz = Z(zn.z0) + (zn.name.startsWith("STREFA") ? 1.3 : 0.6) * PX;
       g.fillText(zn.name, tx, tz);
@@ -207,8 +207,9 @@ export function buildWorld(scene: THREE.Scene): WorldHandle {
     const a = new THREE.Mesh(new THREE.BoxGeometry(sx, 1.2, sz), plinthMat); a.position.set(x, 0.6, z); group.add(a);
     const l = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.01, 0.12, sz + 0.01), lineMat); l.position.set(x, 1.26, z); group.add(l);
   };
-  plinth(0, HALL.z0 + 0.03, 80, 0.06); plinth(0, HALL.z1 - 0.03, 80, 0.06);
-  plinth(HALL.x0 + 0.03, 0, 0.06, 50); plinth(HALL.x1 - 0.03, 0, 0.06, 50);
+  const lenX = HALL.x1 - HALL.x0, lenZ = HALL.z1 - HALL.z0;
+  plinth(0, HALL.z0 + 0.03, lenX, 0.06); plinth(0, HALL.z1 - 0.03, lenX, 0.06);
+  plinth(HALL.x0 + 0.03, 0, 0.06, lenZ); plinth(HALL.x1 - 0.03, 0, 0.06, lenZ);
 
   // dock doors on the east wall
   const doorTex = canvasTex(256, 256, (g) => {
@@ -233,14 +234,15 @@ export function buildWorld(scene: THREE.Scene): WorldHandle {
   for (let x = HALL.x0 + 5; x < HALL.x1; x += 6.5) {
     const t = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.7, HALL.z1 - HALL.z0), trussMat); t.position.set(x, HALL.h + 0.2, 0); group.add(t);
   }
-  const lampMat = new THREE.MeshBasicMaterial({ color: 0xf4f6ff });
-  const lampHousing = new THREE.MeshStandardMaterial({ color: 0x1a1b1f });
-  for (let x = -34; x <= 34; x += 8.5) {
-    for (const z of [-16, -6, 6, 16]) {
-      const h = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.12, 0.42), lampHousing); h.position.set(x, HALL.h - 0.1, z); group.add(h);
-      const l = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.03, 0.3), lampMat); l.position.set(x, HALL.h - 0.175, z); group.add(l);
+  const lamps = new Instancer(unitBox, new THREE.MeshBasicMaterial({ color: 0xf4f6ff }), false);
+  const lampHousings = new Instancer(unitBox, new THREE.MeshStandardMaterial({ color: 0x1a1b1f }), false);
+  for (let x = HALL.x0 + 9; x < HALL.x1; x += 13) {
+    for (let z = HALL.z0 + 6.5; z < HALL.z1; z += 13) {
+      lampHousings.add(x, HALL.h - 0.16, z, 2.8, 0.12, 0.42);
+      lamps.add(x, HALL.h - 0.19, z, 2.6, 0.03, 0.3);
     }
   }
+  lamps.build(group); lampHousings.build(group);
 
   // racks: uprights, beams, a mesh back, pallets and loads on every level
   const rackUp = new Instancer(unitBox, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0.3 }));
@@ -251,7 +253,8 @@ export function buildWorld(scene: THREE.Scene): WorldHandle {
   const loads = cardboard.map((map) => new Instancer(unitBox, new THREE.MeshStandardMaterial({ map, roughness: 0.85 })));
   const wrapped = new Instancer(unitBox, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35, metalness: 0.1, transparent: true, opacity: 0.85 }));
   const meshBack = new THREE.MeshStandardMaterial({ map: meshTexture(), transparent: true, alphaTest: 0.3, side: THREE.DoubleSide, roughness: 0.6, metalness: 0.5 });
-  const LEVELS = [0, 1.85, 3.7, 5.55];
+  const LEVELS = [0, 1.85, 3.7, 5.55, 7.4];
+  const deckMat = new THREE.MeshStandardMaterial({ color: 0x3a3d44, roughness: 0.7, metalness: 0.4 });
   const pick = <T,>(a: readonly T[]) => a[Math.floor(Math.random() * a.length)];
   const loadOn = (x: number, y: number, z: number, maxH: number, ry = 0) => {
     pallets.add(x, y, z, 1.2, 0.14, 1.0, 0xb08a5c, ry);
@@ -268,14 +271,15 @@ export function buildWorld(scene: THREE.Scene): WorldHandle {
       const x = b.x0 + i * bay;
       for (const z of [b.z0 + 0.05, b.z1 - 0.05, (b.z0 + b.z1) / 2 - 0.12, (b.z0 + b.z1) / 2 + 0.12]) rackUp.add(x, 0, z, 0.1, b.y1, 0.1, 0x2b4fd6);
     }
-    for (const y of LEVELS.slice(1).concat([7.1])) {
+    const levels = LEVELS.filter((y) => y < b.y1 - 1.4);
+    for (const y of levels.slice(1).concat([b.y1 - 0.1])) {
       for (const z of [b.z0 + 0.05, b.z1 - 0.05]) beams.add((b.x0 + b.x1) / 2, y - 0.14, z, len, 0.14, 0.07, 0xff6b1a);
     }
     const back = new THREE.Mesh(new THREE.PlaneGeometry(len, b.y1), meshBack);
     (back.material as THREE.MeshStandardMaterial).map!.repeat.set(len / 1.2, b.y1 / 1.2);
     back.position.set((b.x0 + b.x1) / 2, b.y1 / 2, (b.z0 + b.z1) / 2); group.add(back);
     for (let i = 0; i < bays; i++) {
-      for (const y of LEVELS) {
+      for (const y of levels) {
         for (const side of [-1, 1]) {
           for (const k of [-0.5, 0.5]) {
             if (bay < 2.4 && k > 0) continue;
@@ -284,6 +288,19 @@ export function buildWorld(scene: THREE.Scene): WorldHandle {
         }
       }
     }
+  }
+
+  // perches: a deck with a yellow kick rail on the climbable racks, and their ladders
+  for (const b of BOXES) {
+    if (!b.climb) continue;
+    const len = b.x1 - b.x0, cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2;
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(len, 0.06, b.z1 - b.z0), deckMat); deck.position.set(cx, b.y1 - 0.03, cz); deck.receiveShadow = true; group.add(deck);
+    for (const z of [b.z0 + 0.04, b.z1 - 0.04]) beams.add(cx, b.y1, z, len, 0.14, 0.05, 0xf2c200);
+  }
+  for (const l of LADDERS) {
+    const x = l.dx > 0 ? l.x1 - 0.1 : l.x0 + 0.1, cz = (l.z0 + l.z1) / 2;
+    for (const z of [cz - 0.26, cz + 0.26]) beams.add(x, 0, z, 0.06, l.top + 1.0, 0.06, 0xf2c200);
+    for (let y = 0.3; y < l.top; y += 0.3) beams.add(x, y, cz, 0.04, 0.04, 0.5, 0xf2c200);
   }
 
   // pallet stacks: layers of pallet + load, the top layer sometimes shorter
@@ -387,8 +404,8 @@ export function buildWorld(scene: THREE.Scene): WorldHandle {
   const leds: THREE.Mesh[] = [];
   for (const [x, z] of ANCHORS) {
     const a = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.16, 0.28), anchorMat);
-    const inX = Math.abs(x) > 39 ? -Math.sign(x) * 0.3 : 0.45, inZ = Math.abs(z) > 24 ? -Math.sign(z) * 0.3 : 0;
-    a.position.set(x + inX, 8, z + inZ); group.add(a);
+    const onWall = Math.abs(x) > HALL.x1 - 1 || Math.abs(z) > HALL.z1 - 1;
+    a.position.set(x + (onWall ? 0 : 0.45), 8, z); group.add(a);
     const led = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), ledMat); led.position.set(a.position.x, 7.9, a.position.z); group.add(led); leds.push(led);
   }
 

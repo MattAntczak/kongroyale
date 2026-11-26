@@ -24,7 +24,7 @@
     <div id="usePrompt" hidden><kbd>E</kbd><span id="usePromptText"></span></div>
     <div id="chat"></div>
     <input id="chatbox" class="field" maxlength="120" placeholder="Wiadomość do hali…" hidden />
-    <div id="map"><canvas id="mapc" width="544" height="340"></canvas><div class="geo" id="geo" hidden>GEO</div></div>
+    <div id="map"><canvas id="mapc" width="544" height="295"></canvas><div class="geo" id="geo" hidden>GEO</div></div>
     <div class="hud-br">
       <div class="vital"><b id="hp">100</b><div class="hpbar" id="hpbar"><i></i></div></div>
       <div class="ammo"><b id="mag">30</b><small id="res">/ 120</small><span id="wname">Kartonomiot</span></div>
@@ -69,14 +69,14 @@
             <div class="row" id="modeRow"><span class="label">Tryb</span><button class="chip" data-mode="bots" aria-pressed="true">Z botami</button><button class="chip" data-mode="online" aria-pressed="false">Online ze znajomymi</button></div>
             <div class="row" id="teamRow"><span class="label">Twoja grupa</span><button class="chip" data-team="-1" aria-pressed="true">Dowolna</button><button class="chip" data-team="0" aria-pressed="false"><span class="swatch" style="background:var(--team-a)"></span>Grupa A</button><button class="chip" data-team="1" aria-pressed="false"><span class="swatch" style="background:var(--team-b)"></span>Grupa B</button></div>
             <div class="row" id="diffRow"><span class="label">Poziom botów</span><button class="chip" data-diff="easy" aria-pressed="false">Łatwy</button><button class="chip" data-diff="normal" aria-pressed="true">Normalny</button><button class="chip" data-diff="hard" aria-pressed="false">Trudny</button></div>
-            <div class="row" id="countRow"><span class="label">Skład</span><button class="chip" data-count="4" aria-pressed="false">2 na 2</button><button class="chip" data-count="6" aria-pressed="false">3 na 3</button><button class="chip" data-count="8" aria-pressed="true">4 na 4</button><button class="chip" data-count="10" aria-pressed="false">5 na 5</button></div>
+            <div class="row" id="countRow"><span class="label">Skład</span><button class="chip" data-count="8" aria-pressed="false">4 na 4</button><button class="chip" data-count="12" aria-pressed="true">6 na 6</button><button class="chip" data-count="16" aria-pressed="false">8 na 8</button></div>
             <div class="row" id="roomRow" hidden><span class="label">Kod hali</span><input class="field mono" id="room" maxlength="8" placeholder="HALA" style="text-transform:uppercase;flex:1" /></div>
             <div class="cta"><button class="btn btn-primary btn-lg" id="play">Wejdź na halę</button><button class="btn btn-ghost btn-lg" id="howBtn">Sterowanie</button></div>
             <div class="status" id="status"></div>
           </div>
         </div>
         <div class="card">
-          <div class="card-head"><h2>Mapa Live · Hala A</h2><span class="live-pill"><span class="dot"></span> LIVE</span></div>
+          <div class="card-head"><h2>Mapa Live · Hala A · 31 200 m²</h2><span class="live-pill"><span class="dot"></span> LIVE</span></div>
           <div class="card-body" style="padding-bottom:0"><div class="stage"><canvas id="preview"></canvas></div></div>
           <div class="legend"><span class="badge badge-blue"><span class="swatch" style="background:var(--team-a)"></span>Grupa A</span><span class="badge badge-orange"><span class="swatch" style="background:var(--team-b)"></span>Grupa B</span><span class="sp"></span><span id="previewCap">Grupa A 0 : 0 Grupa B</span></div>
         </div>
@@ -89,6 +89,7 @@
           <div><kbd>LPM</kbd>Rzut kartonem</div>
           <div><kbd>Shift</kbd>Sprint</div>
           <div><kbd>Spacja</kbd>Skok na niskie palety</div>
+          <div><kbd>W</kbd>przy żółtej drabinie: wejście na regał z pomostem</div>
           <div><kbd>R</kbd>Przeładowanie</div>
           <div><kbd>1 2 3</kbd>Kartonomiot, Paczkownik, Paletówka</div>
           <div><kbd>Tab</kbd>Tablica wyników</div>

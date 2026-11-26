@@ -104,22 +104,22 @@ export class Game {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
     this.renderer.autoClear = false;
-    this.camera = new THREE.PerspectiveCamera(this.settings.fov, 1, 0.05, 200);
+    this.camera = new THREE.PerspectiveCamera(this.settings.fov, 1, 0.05, 420);
     this.scene.background = new THREE.Color(0x07070a);
-    this.scene.fog = new THREE.Fog(0x07070a, 35, 95);
+    this.scene.fog = new THREE.Fog(0x07070a, 70, 260);
 
     // light: a cool sky fill, a key from the roof lights with shadows, a few warm points down the hall
     this.scene.add(new THREE.HemisphereLight(0xdfe4ff, 0x2a2622, 1.25));
     const key = new THREE.DirectionalLight(0xffffff, 1.6);
-    key.position.set(-12, 30, 8);
+    key.position.set(-30, 60, 20);
     key.castShadow = true;
-    key.shadow.mapSize.set(2048, 2048);
-    Object.assign(key.shadow.camera, { left: -45, right: 45, top: 30, bottom: -30, near: 1, far: 80 });
+    key.shadow.mapSize.set(4096, 4096);
+    Object.assign(key.shadow.camera, { left: -128, right: 128, top: 72, bottom: -72, near: 1, far: 160 });
     key.shadow.bias = -0.0006;
     key.shadow.normalBias = 0.03;
     this.scene.add(key);
-    for (const [x, z] of [[-26, 0], [0, -14], [0, 14], [26, 0], [-26, -18], [-26, 18]]) {
-      const p = new THREE.PointLight(0xfff1dc, 40, 26, 1.6); p.position.set(x, 9.5, z); this.scene.add(p);
+    for (const [x, z] of [[-90, 0], [-45, 0], [0, -30], [0, 30], [45, 0], [90, 0]]) {
+      const p = new THREE.PointLight(0xfff1dc, 60, 45, 1.6); p.position.set(x, 9.5, z); this.scene.add(p);
     }
     this.world = buildWorld(this.scene);
     this.fx = new Fx(this.scene, this.boxHit);
@@ -410,7 +410,7 @@ export class Game {
           this.hitT = 0.3; $("hitmark").className = "on kill";
         }
         if (e.on === this.myId) {
-          $("deathBy").textContent = e.by === this.myId ? "Własny karton. Zdarza się." : `Trafił(a) cię: ${name(e.by)}`;
+          $("deathBy").textContent = e.by === this.myId ? "Upadek z wysokości" : `Trafił(a) cię: ${name(e.by)}`;
           $("deathSub").textContent = `${WEAPONS[e.w].name}${e.head ? " · trafienie w kask" : ""}. Wracasz na halę za chwilę.`;
         }
         break;
@@ -491,7 +491,7 @@ export class Game {
     const canMove = this.alive && this.latest?.phase === "play" && !riding;
     const inp = {
       mx: canMove ? f[0] * fw + r[0] * st : 0, mz: canMove ? f[2] * fw + r[2] * st : 0,
-      jump: canMove && this.keys.has("Space"), sprint: this.keys.has("ShiftLeft") && fw > 0,
+      jump: canMove && this.keys.has("Space"), sprint: this.keys.has("ShiftLeft") && fw > 0, climb: true,
     };
     this.acc += dt;
     // forklifts first: where they are decides what we bump into this frame

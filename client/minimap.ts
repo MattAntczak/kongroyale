@@ -6,7 +6,7 @@ import { BOXES, HALL, ZONES } from "../shared/map";
 import type { PlayerSnap } from "../shared/proto";
 import type { VehicleState } from "../shared/vehicle";
 
-const W = 544, H = 340;
+const W = 544, H = Math.round(544 * (HALL.z1 - HALL.z0) / (HALL.x1 - HALL.x0));
 const sx = W / (HALL.x1 - HALL.x0), sz = H / (HALL.z1 - HALL.z0);
 const X = (x: number) => (x - HALL.x0) * sx, Z = (z: number) => (z - HALL.z0) * sz;
 
@@ -22,7 +22,7 @@ function drawBase(): HTMLCanvasElement {
   }
   for (const b of BOXES) {
     if (b.kind === "wall") continue;
-    g.fillStyle = b.kind === "rack" ? "#cbd5e1" : b.kind === "column" ? "#94a3b8" : "#e2e8f0";
+    g.fillStyle = b.climb ? "#474fff" : b.kind === "rack" ? "#cbd5e1" : b.kind === "column" ? "#94a3b8" : "#e2e8f0";
     g.fillRect(X(b.x0), Z(b.z0), (b.x1 - b.x0) * sx, (b.z1 - b.z0) * sz);
   }
   return c;

@@ -14,21 +14,24 @@ import { findPath, freeAt, randomFree, walkable } from "./nav";
 import type { ClientMsg, Difficulty, Ev, HostMsg, PlayerSnap, SelfSnap } from "./proto";
 
 export const TICK_HZ = 60;
-export const MAX_PLAYERS = 10;
+export const MAX_PLAYERS = 16;
 /** Team eliminations that win the shift. */
 export const TEAM_FRAG_LIMIT = 40;
 export const TEAM_NAMES = ["Grupa A", "Grupa B"] as const;
-export const TIME_LIMIT_S = 6 * 60;
+export const TIME_LIMIT_S = 8 * 60;
 export const END_S = 10;
 export const RESPAWN_S = 3;
 export const SPAWN_PROTECT_S = 1.5;
 export const GEO_S = 10;
 export const MAX_REWIND_S = 0.3;
+/** A drop of more than this (metres) hurts; each further metre costs FALL_DMG_PER_M health. */
+export const SAFE_FALL_M = 4.5;
+export const FALL_DMG_PER_M = 14;
 const HIST = 48;
 const leadPos = [0, 0, 0];
 const tmpSeat = [0, 0, 0];
 
-const BOT_NAMES = ["Zenek", "Halina", "Mirek", "Grażyna", "Waldek", "Bożena", "Rysiek", "Danuta", "Kazik", "Wiesia", "Janusz", "Krystyna"];
+const BOT_NAMES = ["Zenek", "Halina", "Mirek", "Grażyna", "Waldek", "Bożena", "Rysiek", "Danuta", "Kazik", "Wiesia", "Janusz", "Krystyna", "Staszek", "Jadwiga", "Heniek", "Tereska", "Bogdan", "Irena"];
 const PICKUP_RESPAWN_S: Record<PickupKind, number> = { med: 20, ammo: 15, shotgun: 25, geo: 45 };
 
 const DIFF = {
@@ -65,6 +68,8 @@ interface Brain {
   errYaw: number; errPitch: number; errUntil: number; nextThink: number;
   seenX: number; seenZ: number; seenT: number; lastX: number; lastZ: number; stuckCheck: number;
   burstUntil: number; pauseUntil: number; jump: boolean;
+  /** Who last hit us, and until when we look for them beyond our normal view. */
+  alertId: number; alertUntil: number;
 }
 
 export type Team = 0 | 1;
@@ -81,6 +86,8 @@ interface Player {
   brain: Brain | null;
   /** The forklift this player rides (-1 on foot) and the seat: 0 drives, 1 throws from the rear platform. */
   veh: number; seat: number;
+  /** Where the current fall started (the highest point since we last stood still vertically). */
+  fallFrom: number;
 }
 
 interface Forklift {
@@ -139,11 +146,11 @@ export class Sim {
       w: "rifle", mag: { rifle: 0, pistol: 0, shotgun: 0 }, res: { rifle: 0, pistol: 0, shotgun: 0 }, owned: new Set(),
       fireReady: 0, lastFire: -99, reloadUntil: 0, k: 0, d: 0, spawn: 0, protectUntil: 0, geoUntil: 0, lastStateT: 0,
       hist: new Float64Array(HIST * 4), histN: 0,
-      veh: -1, seat: 0,
+      veh: -1, seat: 0, fallFrom: 0,
       brain: bot ? {
         path: null, pi: 0, goalX: 0, goalZ: 0, repathAt: 0, target: 0, reactAt: 0, strafe: 1, strafeUntil: 0,
         errYaw: 0, errPitch: 0, errUntil: 0, nextThink: 0, seenX: 0, seenZ: 0, seenT: -99, lastX: 0, lastZ: 0, stuckCheck: 0,
-        burstUntil: 0, pauseUntil: 0, jump: false,
+        burstUntil: 0, pauseUntil: 0, jump: false, alertId: 0, alertUntil: 0,
       } : null,
     };
     this.players.set(p.id, p);
@@ -236,6 +243,15 @@ export class Sim {
     const inside = m.x > HALL.x0 && m.x < HALL.x1 && m.z > HALL.z0 && m.z < HALL.z1;
     // forklifts are left out: the client saw them a moment ago, the host sees them now
     if (okSpeed && okY && inside && !blocked(m.x, m.y + 0.01, m.z, false)) {
+      // falls: a fast drop keeps its starting height; when it stops, anything past the safe drop hurts. Coming
+      // down a ladder is slower than a fall, so it never counts
+      const fallSpeed = (b.y - m.y) / dt;
+      if (fallSpeed > 4.5) p.fallFrom = Math.max(p.fallFrom, b.y);
+      else {
+        const drop = p.fallFrom - m.y;
+        if (drop > SAFE_FALL_M) this.damage(p, p, Math.round((drop - SAFE_FALL_M) * FALL_DMG_PER_M), false, m.x, m.y, m.z, p.w);
+        p.fallFrom = m.y;
+      }
       b.x = m.x; b.y = m.y; b.z = m.z;
     } else {
       p.spawn++; // the client snaps back to the host's position
@@ -422,7 +438,11 @@ export class Sim {
     if (!q.alive || this.time < q.protectUntil || dmg <= 0 || (q.team === by.team && q !== by)) return;
     q.hp -= dmg;
     this.evs.push({ k: "hit", by: by.id, on: q.id, dmg, head, x: +x.toFixed(2), y: +y.toFixed(2), z: +z.toFixed(2) });
-    if (q.brain && q.brain.target === 0) { q.brain.seenX = by.body.x; q.brain.seenZ = by.body.z; q.brain.seenT = this.time; }
+    if (q.brain && by !== q) {
+      // whoever hits a bot has its attention, however far away: a perch is no free shooting gallery
+      q.brain.alertId = by.id; q.brain.alertUntil = this.time + 5;
+      if (q.brain.target === 0) { q.brain.seenX = by.body.x; q.brain.seenZ = by.body.z; q.brain.seenT = this.time; }
+    }
     if (q.hp > 0) return;
     this.leaveForklift(q, false);
     q.hp = 0; q.alive = false; q.d++; q.respawnAt = this.time + RESPAWN_S; q.killedBy = by.name; q.reloadUntil = 0;
@@ -456,10 +476,11 @@ export class Sim {
     // Grupa A holds the west of the hall, Grupa B the east: prefer a spawn on our own side, far from live enemies,
     // picked among the best three so it is not predictable
     const scored = SPAWNS.map(([x, z]) => {
-      let near = 60;
+      let near = 400;
       for (const q of this.players.values()) if (q !== p && q.alive && q.team !== p.team) near = Math.min(near, Math.hypot(q.body.x - x, q.body.z - z));
-      const home = (p.team === 0 ? -x : x) > 0 ? 40 : 0;
-      return { x, z, near: near + home };
+      // the hall is long: come back on our side, not on top of an enemy but not a minute's walk from the fight either
+      const home = (p.team === 0 ? -x : x) > 0 ? 1000 : 0;
+      return { x, z, near: home - Math.abs(near - 55) - (near < 25 ? 300 : 0) };
     }).sort((a, b) => b.near - a.near);
     const s = scored[Math.floor(this.rand() * Math.min(3, scored.length))];
     p.body.x = s.x; p.body.y = 0; p.body.z = s.z; p.body.vx = p.body.vy = p.body.vz = 0; p.body.onGround = true;
@@ -472,6 +493,7 @@ export class Sim {
     p.mag = { rifle: WEAPONS.rifle.mag, pistol: WEAPONS.pistol.mag, shotgun: 0 };
     p.res = { rifle: WEAPONS.rifle.reserve, pistol: WEAPONS.pistol.reserve, shotgun: 0 };
     p.reloadUntil = 0; p.fireReady = this.time + 0.3;
+    p.fallFrom = 0;
     p.spawn++; p.protectUntil = this.time + SPAWN_PROTECT_S; p.geoUntil = 0; p.histN = 0;
     p.lastStateT = this.time;
     if (p.brain) { p.brain.path = null; p.brain.target = 0; p.brain.seenT = -99; p.brain.repathAt = 0; }
@@ -544,10 +566,11 @@ export class Sim {
       for (const q of this.players.values()) {
         if (q === p || !q.alive || q.team === p.team) continue;
         const dx = q.body.x - ex, dz = q.body.z - ez, d = Math.hypot(dx, dz);
-        if (d > cfg.view) continue;
+        const alerted = q.id === br.alertId && this.time < br.alertUntil && d < 110;
+        if (d > cfg.view && !alerted) continue;
         const heard = this.time - q.lastFire < 0.8 && d < 28;
         const inFov = (dx * fx + dz * fz) / (d || 1) > -0.25;
-        if (!inFov && !heard && d > 4) continue;
+        if (!inFov && !heard && !alerted && d > 4) continue;
         if (!lineOfSight(ex, ey, ez, q.body.x, q.body.y + 1.3, q.body.z)) continue;
         if (d < bestD) { bestD = d; best = q; }
       }
@@ -564,16 +587,22 @@ export class Sim {
           const med = this.nearestPickup(p, "med");
           if (med) { gx = med.x; gz = med.z; need = need || Math.hypot(gx - br.goalX, gz - br.goalZ) > 1; }
         } else if (need) {
-          if (this.rand() < 0.45) {
-            const ready = this.pickups.filter((pk) => this.time >= pk.readyAt);
-            const pk = ready[Math.floor(this.rand() * ready.length)];
+          // the hall is big: mostly head for where an enemy is, so the groups meet instead of wandering apart
+          const roll = this.rand();
+          const foes = [...this.players.values()].filter((q) => q.alive && q.team !== p.team);
+          if (roll < 0.65 && foes.length) {
+            const foe = foes[Math.floor(this.rand() * foes.length)];
+            gx = foe.body.x + (this.rand() - 0.5) * 16; gz = foe.body.z + (this.rand() - 0.5) * 16;
+          } else if (roll < 0.85) {
+            const near = this.pickups.filter((pk) => this.time >= pk.readyAt && Math.hypot(pk.spot.x - b.x, pk.spot.z - b.z) < 50);
+            const pk = near[Math.floor(this.rand() * near.length)];
             if (pk) { gx = pk.spot.x; gz = pk.spot.z; } else [gx, gz] = randomFree(this.rand);
           } else [gx, gz] = randomFree(this.rand);
         }
         if (need || this.time >= br.repathAt) {
           br.goalX = gx; br.goalZ = gz;
           br.path = findPath(b.x, b.z, gx, gz); br.pi = 0;
-          br.repathAt = this.time + 2.5 + this.rand();
+          br.repathAt = this.time + 3.5 + this.rand() * 1.5;
         }
       }
       // stuck check once a second

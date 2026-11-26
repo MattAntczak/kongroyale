@@ -14,7 +14,7 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 
 let mode: "bots" | "online" = "bots";
 let diff: Difficulty = "normal";
-let count = 8;
+let count = 12;
 let team = -1;
 let game: Game | null = null;
 
@@ -92,7 +92,7 @@ function startPreview() {
   const canvas = $<HTMLCanvasElement>("preview");
   const dpr = Math.min(2, window.devicePixelRatio);
   const g = canvas.getContext("2d")!;
-  previewSim = new Sim({ bots: true, difficulty: "normal", seed: 7, maxPlayers: 10 });
+  previewSim = new Sim({ bots: true, difficulty: "normal", seed: 7, maxPlayers: 12 });
   const trails = new Map<number, [number, number][]>();
   let last = performance.now(), acc = 0;
   const loop = (t: number) => {
@@ -113,7 +113,7 @@ function startPreview() {
     for (const zn of ZONES) { g.fillStyle = zn.color + "14"; g.fillRect(X(zn.x0), Z(zn.z0), (zn.x1 - zn.x0) * s, (zn.z1 - zn.z0) * s); }
     for (const b of BOXES) {
       if (b.kind === "wall") continue;
-      g.fillStyle = b.kind === "rack" ? "#cbd5e1" : "#e2e8f0";
+      g.fillStyle = b.climb ? "#474fff" : b.kind === "rack" ? "#cbd5e1" : "#e2e8f0";
       g.fillRect(X(b.x0), Z(b.z0), (b.x1 - b.x0) * s, (b.z1 - b.z0) * s);
     }
     for (const p of snap.players) {
