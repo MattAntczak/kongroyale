@@ -5,13 +5,10 @@
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
-    "noUnusedLocals": false,
     "skipLibCheck": true,
-    "resolveJsonModule": true,
     "isolatedModules": true,
-    "allowImportingTsExtensions": false,
     "types": ["vite/client", "node"],
     "noEmit": true
   },
-  "include": ["client/src", "shared", "server"]
+  "include": ["client", "shared", "server.ts", "smoke.ts", "vite.config.ts"]
 }
