@@ -35,8 +35,13 @@ export interface ObjSnap {
 // client -> host
 export type ClientMsg =
   | { t: "join"; name: string; room: string; /** 0 = workers, 1 = technicians, -1 = whichever has fewer people. */ team?: number }
-  | { t: "state"; x: number; y: number; z: number; yaw: number; pitch: number; moving: boolean; spawn: number }
-  | { t: "shoot"; w: WeaponId; yaw: number; pitch: number; dirs: number[]; view: number }
+  /** Our predicted position and view. `crouch`: crouched (when it is off the host checks there is room to stand). */
+  | { t: "state"; x: number; y: number; z: number; yaw: number; pitch: number; moving: boolean; spawn: number; crouch?: boolean }
+  /** A throw. The host decides its direction: the view (yaw, pitch, without the recoil punch) plus the host's own
+   *  punch and spread for this player. `spd` and `air` are what the client saw (the host only lets them lower its
+   *  own estimate a little); `sight`: through the sight; `n` numbers our throws, echoed in the "shot" event so the
+   *  client can put its predicted boxes on the host's lines. */
+  | { t: "shoot"; w: WeaponId; yaw: number; pitch: number; view: number; spd?: number; air?: boolean; sight?: boolean; n?: number }
   | { t: "reload" }
   | { t: "switch"; w: WeaponId }
   | { t: "chat"; text: string }
@@ -62,6 +67,8 @@ export interface PlayerSnap {
   /** Carrying a case of watch tags: their UWB signal shows on everyone's Live map. */
   carry: boolean;
   x: number; y: number; z: number; yaw: number; pitch: number;
+  /** Crouched: drawn low, and hit with the shorter body. */
+  crouch: boolean;
   hp: number; alive: boolean; w: WeaponId; k: number; d: number;
   /** Seconds since this player last fired (shows them on the Live map). */
   fired: number;
@@ -87,7 +94,7 @@ export interface SelfSnap {
 }
 
 export type Ev =
-  | { k: "shot"; id: number; w: WeaponId; o: [number, number, number]; /** Unit launch direction of each box, xyz. */ dirs: number[] }
+  | { k: "shot"; id: number; w: WeaponId; o: [number, number, number]; /** Unit launch direction of each box, xyz. */ dirs: number[]; /** The shooter's own throw number (people only). */ n?: number }
   | { k: "hit"; by: number; on: number; dmg: number; head: boolean; x: number; y: number; z: number }
   | { k: "kill"; by: number; on: number; w: WeaponId; head: boolean }
   | { k: "pick"; id: number; p: number; kind: PickupKind }

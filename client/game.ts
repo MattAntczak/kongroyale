@@ -3,8 +3,8 @@
 // health, ammo and kills; this file only predicts what the host will most likely say and accepts what it does say.
 
 import * as THREE from "three";
-import { BOX_HIT_PAD, EYE_H, rayPlayer, rayWorld, stepBody, viewDir, type Body } from "../shared/physics";
-import { AIM_SPREAD, MONEY_START, PRICES, SHOP, WEAPONS, WEAPON_ORDER, type WeaponId } from "../shared/weapons";
+import { BOX_HIT_PAD, CROUCH_H, EYE_H, PLAYER_H, STEP_SPEED, bodyH, eyeH, rayPlayer, rayWorld, stepBody, viewDir, type Body } from "../shared/physics";
+import { MONEY_START, PRICES, SHOP, WEAPONS, WEAPON_ORDER, aimCone, kickAim, maxSpeed, newAim, resetAim, settleAim, type WeaponId } from "../shared/weapons";
 import { spreadDirs } from "../shared/sim";
 import type { Ev, HostMsg, PlayerSnap, VehicleSnap } from "../shared/proto";
 import { VEH_USE_R, seatPos, stepVehicle, vehicleBox as vehicleBoxInto, type VehicleState } from "../shared/vehicle";
@@ -24,6 +24,11 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 const INTERP_S = 0.1;
 const VM_GUN = new THREE.MeshStandardMaterial({ color: 0xc29a66, roughness: 0.85 });
 const STATE_HZ = 30;
+/** Others' footsteps carry this far (metres); one step every STRIDE metres run. */
+const STEP_HEAR_M = 25;
+const STRIDE = 2.1;
+/** The camera follows a crouch or a stand-up with this time constant (s): about 0.12 s to settle. */
+const EYE_TAU = 0.04;
 
 export interface Settings { sens: number; vol: number; fov: number }
 export function loadSettings(): Settings {
@@ -103,6 +108,17 @@ export class Game {
   private owned = new Set<WeaponId>(["pistol"]);
   private reloadUntil = 0; private reloadStart = 0;
   private fireReady = 0; private lastShotAt = -9; private lastSwitchAt = -9;
+  /** Our accuracy and recoil (the same model the host keeps for us), our throw count, and the predicted boxes of each
+   *  throw the host has not answered yet: its "shot" event puts them on the host's lines. */
+  private aim = newAim();
+  private shotN = 0;
+  private pending = new Map<number, number[]>();
+  /** The eye height as the camera shows it (eased), the crosshair's gap in pixels, Space held since the last jump. */
+  private eyeOff = EYE_H;
+  private crossGap = 4;
+  private jumpLatch = false;
+  /** Metres run by each other player since their last footstep. */
+  private strides = new Map<number, number>();
   private offset: number | null = null;
   private acc = 0; private sendAcc = 0;
   private last = performance.now();
@@ -200,9 +216,10 @@ export class Game {
     key.shadow.radius = depot ? 2.5 : 1.5;
     this.scene.add(key);
     // depot: one lamp per room (A bay, containers, central hall, cold store B, docks, packing); the cold store is blue-white
-    const points: [number, number, number][] = depot
+    // a building that brings its own lamps (Sortownia) lights its own rooms; it still uses the depot's look otherwise
+    const points: [number, number, number][] = LAYOUTS[first.layout].lights ?? (depot
       ? [[-64, -27, 0xffe9c8], [-64, 11, 0xffe2b8], [-4, -4, 0xfff1dc], [51, 2, 0xbfdcff], [0, 46, 0xffe6c0], [50, -23, 0xfff4e6]]
-      : [[-200, 0, 0xfff1dc], [-100, 0, 0xfff1dc], [0, -60, 0xfff1dc], [0, 60, 0xfff1dc], [100, 0, 0xfff1dc], [200, 0, 0xfff1dc]];
+      : [[-200, 0, 0xfff1dc], [-100, 0, 0xfff1dc], [0, -60, 0xfff1dc], [0, 60, 0xfff1dc], [100, 0, 0xfff1dc], [200, 0, 0xfff1dc]]);
     for (const [x, z, col] of points) {
       // decay 1.4 and a long range: a broad pool that still reaches the walls of its room, cut off before the next one
       const p = new THREE.PointLight(col, depot ? 45 : 80, depot ? 60 : 110, 1.4); p.position.set(x, depot ? 6.6 : 9.5, z); this.scene.add(p);
@@ -250,9 +267,9 @@ export class Game {
       const o = this.names.get(id);
       if (id === owner || !o?.alive || o.tm === team) continue;
       const p = h.root.position;
-      if (rayPlayer(x, y, z, dx, dy, dz, p.x, p.y, p.z, out, BOX_HIT_PAD) && out[0] < r.t) { r.t = out[0]; r.player = true; }
+      if (rayPlayer(x, y, z, dx, dy, dz, p.x, p.y, p.z, out, BOX_HIT_PAD, o.crouch ? CROUCH_H : PLAYER_H) && out[0] < r.t) { r.t = out[0]; r.player = true; }
     }
-    if (this.alive && owner !== this.myId && team !== this.myTeam && rayPlayer(x, y, z, dx, dy, dz, this.body.x, this.body.y, this.body.z, out, BOX_HIT_PAD) && out[0] < r.t) { r.t = out[0]; r.player = true; }
+    if (this.alive && owner !== this.myId && team !== this.myTeam && rayPlayer(x, y, z, dx, dy, dz, this.body.x, this.body.y, this.body.z, out, BOX_HIT_PAD, bodyH(this.body)) && out[0] < r.t) { r.t = out[0]; r.player = true; }
     return r;
   };
 
@@ -295,6 +312,8 @@ export class Game {
       if (this.chatting) return;
       if (e.code === "Tab") { e.preventDefault(); this.showBoard(true); return; }
       if (!this.locked) return;
+      // Ctrl held for a crouch must not turn W, S or D into browser shortcuts
+      if (e.ctrlKey) e.preventDefault();
       this.keys.add(e.code);
       if (e.code === "KeyR") this.reload();
       if (e.code === "KeyE" && !e.repeat) {
@@ -320,10 +339,13 @@ export class Game {
     });
     this.on(window, "keyup", (e: KeyboardEvent) => {
       this.keys.delete(e.code);
+      if (e.code === "Space") this.jumpLatch = false;
       if (e.code === "Tab") this.showBoard(false);
       if (e.code === "KeyE" && this.acting) { this.acting = false; this.link.send({ t: "act", on: false }); }
     });
     this.on(window, "blur", () => { this.keys.clear(); this.mouseDown = false; });
+    // Ctrl is the crouch key, and Ctrl+W would close the tab mid-round: the browser asks first while a match is on
+    this.on(window, "beforeunload", (e: BeforeUnloadEvent) => { if (!this.quitting && this.latest?.phase !== "lobby") { e.preventDefault(); e.returnValue = ""; } });
     const box = $<HTMLInputElement>("chatbox");
     this.on(box, "keydown", (e: KeyboardEvent) => {
       e.stopPropagation();
@@ -371,7 +393,7 @@ export class Game {
 
   private switchTo(w: WeaponId) {
     if (!this.owned.has(w) || w === this.w || !this.alive) return;
-    this.w = w; this.reloadUntil = 0;
+    this.w = w; this.reloadUntil = 0; resetAim(this.aim);
     this.fireReady = this.nowS + 0.25; this.lastSwitchAt = this.nowS;
     this.link.send({ t: "switch", w });
     this.setVmGun(w);
@@ -420,18 +442,23 @@ export class Game {
     this.fireReady = (now - this.fireReady > 0.1 ? now : this.fireReady) + 60 / w.rpm;
     this.mag[this.w]--;
     this.lastShotAt = now;
-    const moving = Math.hypot(this.body.vx, this.body.vz) > 1.2 || !this.body.onGround;
-    const cone = (w.spread + (moving ? w.moveSpread : 0)) * (this.zoomK > 0.8 ? AIM_SPREAD : 1);
-    const dirs = spreadDirs(this.yaw, this.pitch, cone, w.pellets, Math.random);
-    const view = this.serverNow() - INTERP_S;
-    this.link.send({ t: "shoot", w: this.w, yaw: this.yaw, pitch: this.pitch, dirs, view });
+    // the host decides the throw from our view and its own copy of this model; we predict it with the same numbers
+    // (our own random draw: the host's "shot" event moves the boxes onto its lines a moment later)
+    settleAim(this.aim, w, now);
+    const spd = Math.hypot(this.body.vx, this.body.vz), air = !this.body.onGround, sight = this.zoomK > 0.8 && w.zoom > 1;
+    const cone = aimCone(w, this.aim, spd, air, !!this.body.crouch, sight);
+    const dirs = spreadDirs(this.yaw + this.aim.py, this.pitch + this.aim.pp, cone, w.pellets, Math.random);
+    kickAim(this.aim, this.w, now);
+    const view = this.serverNow() - INTERP_S, n = ++this.shotN;
+    this.link.send({ t: "shoot", w: this.w, yaw: this.yaw, pitch: this.pitch, view, spd: +spd.toFixed(2), air, sight, n });
     // our own boxes fly from the eye like the host's do, so they land where the host's land
-    const ox = this.body.x, oy = this.body.y + EYE_H, oz = this.body.z;
-    for (let i = 0; i < dirs.length; i += 3) this.fx.launch(ox, oy, oz, dirs[i], dirs[i + 1], dirs[i + 2], this.w, this.myTeam, this.myId);
+    const ox = this.body.x, oy = this.body.y + eyeH(this.body.crouch), oz = this.body.z;
+    const ids: number[] = [];
+    for (let i = 0; i < dirs.length; i += 3) ids.push(this.fx.launch(ox, oy, oz, dirs[i], dirs[i + 1], dirs[i + 2], this.w, this.myTeam, this.myId));
+    this.pending.set(n, ids);
+    if (this.pending.size > 40) this.pending.delete(this.pending.keys().next().value!);
     this.fx.muzzle(ox + dirs[0] * 0.8, oy, oz + dirs[2] * 0.8);
     sfx.shot(this.w);
-    this.pitch = Math.min(1.5, this.pitch + w.kick * (0.6 + Math.random() * 0.5));
-    this.yaw += (Math.random() - 0.5) * w.kick * 0.5;
     this.vmKick = 1; this.vmFlashT = 0.045; this.shake = Math.min(1, this.shake + w.kick * 8);
     if (this.w === "grenade") { if (this.mag.grenade === 0) this.switchTo(this.best()); }
     else if (this.mag[this.w] === 0) this.reload();
@@ -490,7 +517,7 @@ export class Game {
       const respawned = !this.alive || me.spawn > this.spawn + 0 && Math.hypot(me.x - this.body.x, me.z - this.body.z) > 3;
       this.spawn = me.spawn;
       this.body.x = me.x; this.body.y = me.y; this.body.z = me.z; this.body.vx = this.body.vy = this.body.vz = 0;
-      if (respawned) { this.yaw = me.yaw; this.pitch = 0; }
+      if (respawned) { this.yaw = me.yaw; this.pitch = 0; this.body.crouch = false; this.body.tucked = false; resetAim(this.aim); }
     }
     this.alive = me.alive; this.myGroup = me.group & 1;
     // a launcher we did not have a snap ago: just bought, the host has put it in our hands, full
@@ -537,7 +564,15 @@ export class Game {
     const name = (id: number) => this.names.get(id)?.n ?? "?";
     switch (e.k) {
       case "shot": {
-        if (e.id === this.myId) return;
+        if (e.id === this.myId) {
+          // the host's own lines for our throw: move the boxes we predicted onto them
+          const ids = e.n !== undefined ? this.pending.get(e.n) : undefined;
+          if (ids) {
+            this.pending.delete(e.n!);
+            ids.forEach((i, k) => this.fx.reaim(i, this.myId, e.o[0], e.o[1], e.o[2], e.dirs[k * 3], e.dirs[k * 3 + 1], e.dirs[k * 3 + 2]));
+          }
+          return;
+        }
         const [ox, oy, oz] = e.o;
         const dist = Math.hypot(ox - this.body.x, oz - this.body.z);
         const team = this.names.get(e.id)?.tm ?? -1;
@@ -678,9 +713,14 @@ export class Game {
     const riding = this.veh >= 0 && this.alive;
     const driving = riding && this.seat === 0;
     const canMove = this.alive && this.latest?.phase === "play" && !riding;
+    // Shift walks quietly, Ctrl or C crouches; Space jumps once per press (holding it does not hop on its own)
+    const scopedRun = WEAPONS[this.w].zoom >= 3 && this.zoomK > 0.6;
     const inp = {
       mx: canMove ? f[0] * fw + r[0] * st : 0, mz: canMove ? f[2] * fw + r[2] * st : 0,
-      jump: canMove && this.keys.has("Space"), sprint: this.keys.has("ShiftLeft") && fw > 0, climb: true,
+      jump: canMove && this.keys.has("Space") && !this.jumpLatch,
+      walk: this.keys.has("ShiftLeft") || this.keys.has("ShiftRight"),
+      crouch: this.alive && !riding && (this.keys.has("ControlLeft") || this.keys.has("ControlRight") || this.keys.has("KeyC")),
+      speed: maxSpeed(this.w, scopedRun), climb: true,
     };
     this.acc += dt;
     // forklifts first: where they are decides what we bump into this frame
@@ -691,8 +731,15 @@ export class Game {
     while (this.acc >= 1 / 60) {
       this.acc -= 1 / 60;
       if (driving) stepVehicle(this.drive, throttle, steer, 1 / 60, [...this.vehPoses.values()].filter((v) => v !== this.vehPoses.get(this.veh)));
-      else if (this.alive && !riding) stepBody(this.body, inp, 1 / 60);
+      else if (this.alive && !riding) {
+        const wasGround = this.body.onGround;
+        stepBody(this.body, inp, 1 / 60);
+        if (inp.jump && wasGround && !this.body.onGround && this.body.vy > 0) { this.jumpLatch = true; inp.jump = false; }
+        // a crouch in the air lifts the feet: keep the eye where it was and let it ease from there
+        if (this.body.shift) { this.eyeOff -= this.body.shift; this.body.shift = 0; }
+      }
     }
+    if (riding) { this.body.crouch = false; this.body.tucked = false; }
     if (riding) {
       const pose = driving ? this.drive : this.vehPoses.get(this.veh);
       if (pose) { seatPos(pose, this.seat, this.seatTmp); this.body.x = this.seatTmp[0]; this.body.y = this.seatTmp[1]; this.body.z = this.seatTmp[2]; }
@@ -702,7 +749,7 @@ export class Game {
     this.sendAcc += dt;
     if (this.sendAcc >= 1 / STATE_HZ && this.myId) {
       this.sendAcc = 0;
-      if (this.alive) this.link.send({ t: "state", x: this.body.x, y: this.body.y, z: this.body.z, yaw: this.yaw, pitch: this.pitch, moving: Math.hypot(this.body.vx, this.body.vz) > 1, spawn: this.spawn });
+      if (this.alive) this.link.send({ t: "state", x: this.body.x, y: this.body.y, z: this.body.z, yaw: this.yaw, pitch: this.pitch, moving: Math.hypot(this.body.vx, this.body.vz) > 1, spawn: this.spawn, crouch: !!this.body.crouch });
       if (driving) this.link.send({ t: "drive", x: this.drive.x, z: this.drive.z, yaw: this.drive.yaw, speed: this.drive.speed, rev: this.vrev });
     }
     if (this.reloadUntil && nowS >= this.reloadUntil) {
@@ -729,32 +776,43 @@ export class Game {
         }
         h.setWeapon(pb.w);
         h.setCarry(pb.carry);
+        h.setCrouch(!!pb.crouch);
         const d = Math.hypot(x - this.body.x, z - this.body.z);
         // a driver faces where the forklift faces, sitting; a thrower stands and aims freely
         const ride = pb.veh >= 0 ? this.vehPoses.get(pb.veh) : undefined;
         if (ride && pb.seat === 0) yaw = ride.yaw - Math.PI / 2;
         const mate = riding && pb.veh === this.veh; // no name tag in the face of whoever rides with us
         h.update(x, y, z, yaw, pitch, pb.alive, dt, !mate && (h.ally ? d < 80 : d < 25), !!ride && pb.seat === 0);
-        if (pb.alive && d < 14 && Math.hypot(x - h.root.position.x, z - h.root.position.z) >= 0) { /* footsteps below */ }
+        // footsteps: someone running on the floor (not walking, not crouched, not riding) is heard within STEP_HEAR_M
+        const run = pa && a && b.time > a.time && pa.alive ? Math.hypot(pb.x - pa.x, pb.z - pa.z) / (b.time - a.time) : 0;
+        const rise = pa && a && b.time > a.time ? Math.abs(pb.y - pa.y) / (b.time - a.time) : 0;
+        if (pb.alive && pb.veh < 0 && !pb.crouch && run > STEP_SPEED && rise < 1 && d < STEP_HEAR_M) {
+          let m = (this.strides.get(id) ?? Math.random() * STRIDE) + run * dt;
+          if (m >= STRIDE) { m -= STRIDE; sfx.step(d); }
+          this.strides.set(id, m);
+        }
       }
     }
-    for (const [id, h] of this.humans) if (!seen.has(id)) { this.scene.remove(h.root); h.dispose(); this.humans.delete(id); }
+    for (const [id, h] of this.humans) if (!seen.has(id)) { this.scene.remove(h.root); h.dispose(); this.humans.delete(id); this.strides.delete(id); }
 
     // camera
     const speed = Math.hypot(this.body.vx, this.body.vz);
     if (this.body.onGround && this.alive) {
       this.bob += dt * speed * 1.6;
+      // only running is heard: a walk (Shift) or a crouch is silent, for us as for everyone else
       this.stepT -= dt * speed;
-      if (this.stepT <= 0 && speed > 2) { this.stepT = 2.1; sfx.step(); }
+      if (this.stepT <= 0 && speed > STEP_SPEED) { this.stepT = STRIDE; sfx.step(); }
     }
     const bobY = Math.sin(this.bob * 2) * 0.035 * Math.min(1, speed / 6);
     this.shake = Math.max(0, this.shake - dt * 4);
-    const deadDrop = 0;
-    this.camera.position.set(this.body.x, this.body.y + EYE_H + bobY - deadDrop, this.body.z);
+    this.eyeOff += (eyeH(this.body.crouch) - this.eyeOff) * Math.min(1, dt / EYE_TAU);
+    // the recoil punch moves the view itself: the boxes follow it, and pulling the mouse down works against it
+    settleAim(this.aim, WEAPONS[this.w], this.nowS);
+    this.camera.position.set(this.body.x, this.body.y + this.eyeOff + bobY, this.body.z);
     this.camera.rotation.set(0, 0, 0);
     this.camera.rotation.order = "YXZ";
-    this.camera.rotation.y = this.yaw + (Math.random() - 0.5) * this.shake * 0.01;
-    this.camera.rotation.x = this.pitch + (Math.random() - 0.5) * this.shake * 0.01;
+    this.camera.rotation.y = this.yaw + this.aim.py + (Math.random() - 0.5) * this.shake * 0.01;
+    this.camera.rotation.x = this.pitch + this.aim.pp + (Math.random() - 0.5) * this.shake * 0.01;
     this.camera.rotation.z = 0;
     if (!this.alive) {
       // out for the round: watch a teammate from behind (left click picks the next one)
@@ -941,11 +999,13 @@ export class Game {
       : this.veh >= 0 && m.me.alive ? (nowS - this.rideT < 4 ? "Wysiądź" : "") : use ? (use.seat === 0 ? "Prowadź wózek" : "Wskocz na wózek") : "";
     $("usePrompt").hidden = !prompt;
     if (prompt) this.set("usePromptText", prompt);
-    // crosshair opens with spread
-    const moving = Math.hypot(this.body.vx, this.body.vz) > 1.2 || !this.body.onGround;
-    const gap = 4 + (w.spread + (moving ? w.moveSpread : 0)) * 420 + this.vmKick * 6;
-    const ci = $("cross").children as HTMLCollectionOf<HTMLElement>;
-    ci[0].style.top = `${-gap - 8}px`; ci[1].style.top = `${gap}px`; ci[2].style.left = `${-gap - 8}px`; ci[3].style.left = `${gap}px`;
+    // the crosshair shows the real cone of the next throw: it opens with a spray, running or a jump and closes as the
+    // aim recovers (the gap is the cone's radius on the screen, so a box lands inside it)
+    const cone = aimCone(w, this.aim, Math.hypot(this.body.vx, this.body.vz), !this.body.onGround, !!this.body.crouch, this.zoomK > 0.8 && w.zoom > 1);
+    const want = 3 + Math.tan(cone) / Math.tan(this.camera.fov * Math.PI / 360) * window.innerHeight / 2;
+    this.crossGap += (want - this.crossGap) * Math.min(1, dt * 30);
+    const gap = this.crossGap.toFixed(1);
+    if (this.hudCache.crossGap !== gap) { this.hudCache.crossGap = gap; $("cross").style.setProperty("--gap", `${gap}px`); }
     if (this.hitT > 0) { this.hitT -= dt; if (this.hitT <= 0) $("hitmark").className = ""; }
     this.hurtT = Math.max(0, this.hurtT - dt);
     $("vignette").style.opacity = String(Math.max(this.hurtT * 1.4, hp < 30 && m.me.alive ? 0.35 + Math.sin(nowS * 4) * 0.1 : 0));

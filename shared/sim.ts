@@ -11,8 +11,8 @@
 
 import { BOXES, PICKUPS, SPAWNS, HALL, LAYOUTS, HALL_LAYOUTS, DEPOT_LAYOUT, SORT_LAYOUT, VEHICLE_SPAWNS, sites, useLayout, type Box as HallBox, type PickupKind, type PickupSpot } from "./map";
 import { SEATS, VEH_MAX_SPEED, VEH_USE_R, seatPos, stepVehicle, vehicleBlocked, vehicleBox, type VehicleState } from "./vehicle";
-import { BOX_HIT_PAD, EYE_H, PLAYER_H, SPRINT_SPEED, blocked, lineOfSight, rayPlayer, rayWorld, setDynamicBoxes, stepBody, viewDir, type Body } from "./physics";
-import { BOX_GRAVITY, BOX_LIFE_S, GRENADE_FUSE_S, GRENADE_GRAVITY, GRENADE_R, WEAPONS, PRICES, SHOP, MONEY_START, MONEY_MAX, MONEY_WIN, MONEY_LOSS, MONEY_KILL, MONEY_POINT, BUY_S, falloff, lobPitch, type WeaponId } from "./weapons";
+import { BOX_HIT_PAD, CROUCH_H, MAX_FOOT_SPEED, STEP_SPEED, PLAYER_H, blocked, bodyH, eyeH, lineOfSight, rayPlayer, rayWorld, setDynamicBoxes, stepBody, supported, viewDir, type Body } from "./physics";
+import { BOX_GRAVITY, BOX_LIFE_S, GRENADE_FUSE_S, GRENADE_GRAVITY, GRENADE_R, WEAPONS, PRICES, SHOP, MONEY_START, MONEY_MAX, MONEY_WIN, MONEY_LOSS, MONEY_KILL, MONEY_POINT, BUY_S, falloff, lobPitch, maxSpeed, newAim, resetAim, settleAim, aimCone, kickAim, type AimState, type WeaponId } from "./weapons";
 import { findPath, freeAt, randomFree, walkable } from "./nav";
 import type { ClientMsg, Config, Difficulty, Ev, HostMsg, Mission, ObjSnap, PlayerSnap, SelfSnap } from "./proto";
 
@@ -44,6 +44,14 @@ export const MAX_REWIND_S = 0.3;
 export const SAFE_FALL_M = 4.5;
 export const FALL_DMG_PER_M = 14;
 const HIST = 48;
+/** One history entry: time, x, y, z, crouched. */
+const HS = 5;
+/** The host's movement check: a budget of metres that refills at MAX_FOOT_SPEED × MOVE_SLACK and holds at most
+ *  MOVE_BURST, so bunched-up messages pass and a steady over-speed runs dry within a few seconds. */
+const MOVE_SLACK = 1.05;
+const MOVE_BURST = 1.5;
+/** Bots hear someone running this close (metres): a little less than people do (25 m), they do not listen as well. */
+const STEP_HEAR_M = 20;
 const leadPos = [0, 0, 0];
 const tmpSeat = [0, 0, 0];
 const goalTmp = [0, 0];
@@ -54,10 +62,13 @@ const ROUTE_FLANK = [[170, 102.5], [20, 106], [-66, 100]];
 const BOT_NAMES = ["Zenek", "Halina", "Mirek", "Grażyna", "Waldek", "Bożena", "Rysiek", "Danuta", "Kazik", "Wiesia", "Janusz", "Krystyna", "Staszek", "Jadwiga", "Heniek", "Tereska", "Bogdan", "Irena"];
 const PICKUP_RESPAWN_S: Record<PickupKind, number> = { med: 20, ammo: 15, geo: 45 };
 
+// `still`: the speed under which a bot lets go of a throw (it stops first, as a player counter-strafes); `comp`: how
+// much of the recoil punch it pulls down against; `crouch`: the chance it crouches for a burst at mid range;
+// `holdCrouch`: the chance a guard that was holding an angle crouches for its first burst
 const DIFF = {
-  easy: { react: 0.6, aimErr: 0.11, turn: 3.2, view: 32, burst: 0.35, pause: 0.55, lead: 0.3, strafe: 0.3 },
-  normal: { react: 0.35, aimErr: 0.06, turn: 5.5, view: 45, burst: 0.5, pause: 0.35, lead: 0.7, strafe: 0.5 },
-  hard: { react: 0.2, aimErr: 0.03, turn: 9, view: 60, burst: 0.8, pause: 0.2, lead: 1, strafe: 0.7 },
+  easy: { react: 0.6, aimErr: 0.11, turn: 3.2, view: 32, burst: 0.35, pause: 0.55, lead: 0.3, strafe: 0.45, still: 99, comp: 0.3, crouch: 0, holdCrouch: 0 },
+  normal: { react: 0.35, aimErr: 0.06, turn: 5.5, view: 45, burst: 0.5, pause: 0.35, lead: 0.7, strafe: 0.75, still: 2.2, comp: 0.6, crouch: 0, holdCrouch: 0.5 },
+  hard: { react: 0.2, aimErr: 0.03, turn: 9, view: 60, burst: 0.8, pause: 0.2, lead: 1, strafe: 1, still: 1.2, comp: 0.85, crouch: 0.4, holdCrouch: 0.7 },
 } as const;
 
 export function mulberry32(seed: number) {
@@ -88,6 +99,8 @@ interface Brain {
   errYaw: number; errPitch: number; errUntil: number; nextThink: number;
   seenX: number; seenZ: number; seenT: number; lastX: number; lastZ: number; stuckCheck: number;
   burstUntil: number; pauseUntil: number; jump: boolean;
+  /** Crouching for this burst. */
+  crouch: boolean;
   /** Who last hit us, and until when we look for them beyond our normal view. */
   alertId: number; alertUntil: number;
   /** This life's job: work the mission (attack or guard the objective) or hunt the other team. */
@@ -96,6 +109,13 @@ interface Brain {
   lane: number; wp: number;
   /** A worker who walks between A and B instead of holding one: when they next change over. */
   roverAt: number;
+  /** A worker who keeps their point when the other one is called (one per point); the way an idle guard faces,
+   *  worked out once per post (NaN: not yet). */
+  anchor: boolean; faceYaw: number; faceX: number; faceZ: number;
+  /** This fight began with the bot holding an angle: it stands its ground (no side steps) until it has thrown once. */
+  held: boolean;
+  /** A technician who goes for the other point this round (a lurker): it pulls guards away from the main push. */
+  lurk: boolean;
 }
 
 export type Team = 0 | 1;
@@ -110,6 +130,10 @@ interface Player {
   fireReady: number; lastFire: number; reloadUntil: number;
   k: number; d: number; spawn: number; protectUntil: number; geoUntil: number;
   lastStateT: number;
+  /** Accuracy and recoil of the launcher in hand. */
+  aim: AimState;
+  /** People: horizontal speed seen from their last two states, the movement budget (MOVE_BURST). */
+  hspeed: number; budget: number;
   hist: Float64Array; histN: number;
   brain: Brain | null;
   /** The forklift this player rides (-1 on foot) and the seat: 0 drives, 1 throws from the rear platform. */
@@ -179,6 +203,10 @@ export class Sim {
   private bootEnd = 0;
   /** The point the technicians' bots go for this round. */
   private botSite = 0;
+  /** When a worker last saw a technician close to point A or B (the call that brings the other point's guards over),
+   *  and where the technicians started this round (idle guards face the way in from there). */
+  private seenAtSite = [-99, -99];
+  private techFrom = [0, 0];
   /** The case of watch tags when it lies on the floor. */
   private caseAt: { x: number; z: number } | null = null;
   private lastActEv = -99;
@@ -198,12 +226,14 @@ export class Sim {
       hp: 100, alive: true, respawnAt: 0, killedBy: "",
       money: MONEY_START, w: "pistol", mag: { rifle: 0, pistol: 0, shotgun: 0, sniper: 0, grenade: 0 }, res: { rifle: 0, pistol: 0, shotgun: 0, sniper: 0, grenade: 0 }, owned: new Set(),
       fireReady: 0, lastFire: -99, reloadUntil: 0, k: 0, d: 0, spawn: 0, protectUntil: 0, geoUntil: 0, lastStateT: 0,
-      hist: new Float64Array(HIST * 4), histN: 0,
+      aim: newAim(), hspeed: 0, budget: MOVE_BURST,
+      hist: new Float64Array(HIST * HS), histN: 0,
       veh: -1, seat: 0, fallFrom: 0, acting: false, carry: false, group: team,
       brain: bot ? {
         path: null, pi: 0, goalX: 0, goalZ: 0, repathAt: 0, target: 0, reactAt: 0, strafe: 1, strafeUntil: 0,
         errYaw: 0, errPitch: 0, errUntil: 0, nextThink: 0, seenX: 0, seenZ: 0, seenT: -99, lastX: 0, lastZ: 0, stuckCheck: 0,
-        burstUntil: 0, pauseUntil: 0, jump: false, alertId: 0, alertUntil: 0, job: "mission", station: 0, lane: 0, wp: 0, roverAt: 0,
+        burstUntil: 0, pauseUntil: 0, jump: false, crouch: false, alertId: 0, alertUntil: 0, job: "mission", station: 0, lane: 0, wp: 0, roverAt: 0,
+        anchor: false, faceYaw: NaN, faceX: NaN, faceZ: NaN, held: false, lurk: false,
       } : null,
     };
     this.players.set(p.id, p);
@@ -312,7 +342,7 @@ export class Sim {
       case "state": this.onState(p, m); break;
       case "shoot": this.onShoot(p, m); break;
       case "reload": this.startReload(p); break;
-      case "switch": if (p.owned.has(m.w) && p.w !== m.w) { p.w = m.w; p.reloadUntil = 0; p.fireReady = Math.max(p.fireReady, this.time + 0.25); } break;
+      case "switch": if (p.owned.has(m.w) && p.w !== m.w) { p.w = m.w; p.reloadUntil = 0; p.fireReady = Math.max(p.fireReady, this.time + 0.25); resetAim(p.aim); } break;
       case "use": this.useForklift(p); break;
       case "act": p.acting = !!m.on; break;
       case "team": this.setTeam(p, m.team); break;
@@ -331,15 +361,23 @@ export class Sim {
     p.pitch = Math.max(-1.5, Math.min(1.5, m.pitch));
     p.moving = !!m.moving;
     if (p.veh >= 0) return; // riders go where the forklift goes
-    const dt = Math.max(0.016, Math.min(0.5, this.time - p.lastStateT));
+    const dt = Math.max(0, Math.min(0.5, this.time - p.lastStateT));
     p.lastStateT = this.time;
     const b = p.body;
     const dh = Math.hypot(m.x - b.x, m.z - b.z);
-    const okSpeed = dh <= SPRINT_SPEED * 1.4 * dt + 0.6;
+    // the speed limit as a budget of metres: it refills with the time between messages, so two messages that arrive
+    // in one tick pass, while a client that keeps moving faster than anyone can on foot runs it dry
+    p.budget = Math.min(MOVE_BURST, p.budget + MAX_FOOT_SPEED * MOVE_SLACK * dt);
+    const okSpeed = dh <= p.budget + 0.05;
     const okY = m.y >= -0.01 && m.y <= HALL.h && m.y - b.y <= 1.6 * Math.max(dt, 0.1) * 8;
     const inside = m.x > HALL.x0 && m.x < HALL.x1 && m.z > HALL.z0 && m.z < HALL.z1;
+    // standing (or claiming to) needs head room for the whole body: nobody stands up into a low ceiling
+    const crouch = !!m.crouch, h = crouch ? CROUCH_H : PLAYER_H;
     // forklifts are left out: the client saw them a moment ago, the host sees them now
-    if (okSpeed && okY && inside && !blocked(m.x, m.y + 0.01, m.z, false)) {
+    if (okSpeed && okY && inside && !blocked(m.x, m.y + 0.01, m.z, false, h)) {
+      p.budget -= dh;
+      p.hspeed = dh / Math.max(dt, 1 / 30);
+      b.crouch = crouch;
       // falls: a fast drop keeps its starting height; when it stops, anything past the safe drop hurts. Coming
       // down a ladder is slower than a fall, so it never counts
       const fallSpeed = (b.y - m.y) / dt;
@@ -431,10 +469,23 @@ export class Sim {
     setDynamicBoxes(this.dynBoxes);
   }
 
+  /**
+   * A person's throw. The client only says where it looked (without the punch); the host works out the cone and the
+   * punch from its own record of this player (the burst, the stance, the speed it saw) and draws the spread from its
+   * own random numbers. So no client can throw a straight spray or a dead-on throw on the run: it can only aim. The
+   * client's own speed and air claims count only as far as they are close to what the host saw, which forgives the
+   * host seeing a counter-strafe one message late. The client predicts the same way and lines its boxes up with the
+   * host's when the "shot" event comes back (by `n`).
+   */
   private onShoot(p: Player, m: Extract<ClientMsg, { t: "shoot" }>) {
-    if (!Array.isArray(m.dirs) || !m.dirs.every(Number.isFinite)) return;
-    if (m.w !== p.w && p.owned.has(m.w)) p.w = m.w;
-    this.fire(p, m.yaw, m.pitch, m.dirs, Number.isFinite(m.view) ? m.view : this.time, 0.04);
+    if (![m.yaw, m.pitch].every(Number.isFinite)) return;
+    if (m.w !== p.w && p.owned.has(m.w)) { p.w = m.w; resetAim(p.aim); }
+    const b = p.body;
+    const claim = Number.isFinite(m.spd) ? Math.max(0, m.spd as number) : p.hspeed;
+    const spd = Math.max(claim, p.hspeed - 1.6);
+    const air = !!m.air || !supported(b.x, b.y, b.z);
+    const sight = !!m.sight && WEAPONS[p.w].zoom > 1;
+    this.fire(p, m.yaw, m.pitch, Number.isFinite(m.view) ? m.view : this.time, 0.04, spd, air, sight, 0, Number.isFinite(m.n) ? m.n : undefined);
   }
 
   // ---------------------------------------------------------------- combat
@@ -445,60 +496,72 @@ export class Sim {
     p.reloadUntil = this.time + w.reloadS;
   }
 
+  /** Where a player was at time `t` (lag compensation): x, y, z and whether crouched (1) in out[0…3]. */
   private posAt(p: Player, t: number, out: number[]) {
     const b = p.body;
-    out[0] = b.x; out[1] = b.y; out[2] = b.z;
+    out[0] = b.x; out[1] = b.y; out[2] = b.z; out[3] = b.crouch ? 1 : 0;
     if (t >= this.time - 1e-6 || p.histN === 0) return;
     const n = Math.min(p.histN, HIST);
     for (let i = 0; i < n; i++) {
-      const idx = ((p.histN - 1 - i) % HIST) * 4;
+      const idx = ((p.histN - 1 - i) % HIST) * HS;
       if (p.hist[idx] <= t) {
         if (i === 0) return;
-        const nidx = ((p.histN - i) % HIST) * 4;
+        const nidx = ((p.histN - i) % HIST) * HS;
         const t0 = p.hist[idx], t1 = p.hist[nidx];
         const a = t1 > t0 ? (t - t0) / (t1 - t0) : 0;
         out[0] = p.hist[idx + 1] + (p.hist[nidx + 1] - p.hist[idx + 1]) * a;
         out[1] = p.hist[idx + 2] + (p.hist[nidx + 2] - p.hist[idx + 2]) * a;
         out[2] = p.hist[idx + 3] + (p.hist[nidx + 3] - p.hist[idx + 3]) * a;
+        out[3] = p.hist[a < 0.5 ? idx + 4 : nidx + 4];
         return;
       }
     }
-    const idx = ((p.histN - n) % HIST) * 4;
-    out[0] = p.hist[idx + 1]; out[1] = p.hist[idx + 2]; out[2] = p.hist[idx + 3];
+    const idx = ((p.histN - n) % HIST) * HS;
+    out[0] = p.hist[idx + 1]; out[1] = p.hist[idx + 2]; out[2] = p.hist[idx + 3]; out[3] = p.hist[idx + 4];
   }
 
-  private fire(p: Player, yaw: number, pitch: number, dirs: number[], viewT: number, slack: number) {
+  /** The cone (radians) a player's next throw would have right now, from the host's own record. For tests and bots. */
+  coneOf(id: number, spd = 0, air = false, sight = false): number {
+    const p = this.players.get(id);
+    if (!p) return 0;
+    const w = WEAPONS[p.w];
+    settleAim(p.aim, w, this.time);
+    return aimCone(w, p.aim, spd, air, !!p.body.crouch, sight);
+  }
+
+  /**
+   * Throw from `p`'s eye along the view (yaw, pitch) plus the recoil punch, spread over this player's cone. `comp` is
+   * the share of the punch the thrower pulls down against (bots; people do it with the mouse, so 0).
+   */
+  private fire(p: Player, yaw: number, pitch: number, viewT: number, slack: number, spd: number, air: boolean, sight: boolean, comp: number, n?: number) {
     const w = WEAPONS[p.w];
     if (!p.alive || this.phase !== "play" || !p.owned.has(p.w) || p.reloadUntil) return;
     if (p.veh >= 0 && p.seat === 0) return; // the driver drives
     if (p.mag[p.w] <= 0 || this.time < p.fireReady - slack) return;
-    if (dirs.length !== w.pellets * 3) return;
     p.fireReady = Math.max(this.time, p.fireReady) + 60 / w.rpm;
     p.mag[p.w]--;
     p.lastFire = this.time;
     p.protectUntil = 0;
-    const [vx, vy, vz] = viewDir(yaw, pitch);
-    const cosMax = Math.cos(w.spread + w.moveSpread + 0.03);
+    settleAim(p.aim, w, this.time);
+    const cone = aimCone(w, p.aim, spd, air, !!p.body.crouch, sight);
+    const dirs = spreadDirs(yaw + p.aim.py * (1 - comp), pitch + p.aim.pp * (1 - comp), cone, w.pellets, this.rand);
+    kickAim(p.aim, p.w, this.time);
     const lag = Math.max(0, Math.min(MAX_REWIND_S, this.time - viewT));
-    const ox = p.body.x, oy = p.body.y + EYE_H, oz = p.body.z;
+    const ox = p.body.x, oy = p.body.y + eyeH(p.body.crouch), oz = p.body.z;
     const sent: number[] = [];
     for (let i = 0; i < dirs.length; i += 3) {
-      let dx = dirs[i], dy = dirs[i + 1], dz = dirs[i + 2];
-      const len = Math.hypot(dx, dy, dz);
-      if (len < 1e-6) continue;
-      dx /= len; dy /= len; dz /= len;
-      if (dx * vx + dy * vy + dz * vz < cosMax) { dx = vx; dy = vy; dz = vz; }
+      const dx = dirs[i], dy = dirs[i + 1], dz = dirs[i + 2];
       this.boxes.push({ owner: p, team: p.team, w: p.w, x: ox, y: oy, z: oz, vx: dx * w.speed, vy: dy * w.speed, vz: dz * w.speed, dist: 0, born: this.time, lag });
       sent.push(+dx.toFixed(4), +dy.toFixed(4), +dz.toFixed(4));
     }
-    this.evs.push({ k: "shot", id: p.id, w: p.w, o: [+ox.toFixed(2), +oy.toFixed(2), +oz.toFixed(2)], dirs: sent });
+    this.evs.push({ k: "shot", id: p.id, w: p.w, o: [+ox.toFixed(2), +oy.toFixed(2), +oz.toFixed(2)], dirs: sent, ...(n !== undefined ? { n } : {}) });
     if (p.w === "grenade" && p.mag.grenade === 0) { p.owned.delete("grenade"); p.w = p.owned.has("rifle") ? "rifle" : p.owned.has("sniper") ? "sniper" : p.owned.has("shotgun") ? "shotgun" : "pistol"; p.fireReady = this.time + 0.4; }
     else if (p.mag[p.w] === 0) this.startReload(p);
   }
 
   /** Fly every box one step: walls stop it, the first enemy it meets takes the hit. Teammates let it through. */
   private stepBoxes(dt: number) {
-    const pos = [0, 0, 0], tOut = [0];
+    const pos = [0, 0, 0, 0], tOut = [0];
     for (let i = this.boxes.length - 1; i >= 0; i--) {
       const b = this.boxes[i];
       const nade = b.w === "grenade";
@@ -510,7 +573,7 @@ export class Sim {
       for (const q of this.players.values()) {
         if (q === b.owner || !q.alive || q.team === b.team) continue;
         this.posAt(q, this.time - b.lag, pos);
-        const part = rayPlayer(b.x, b.y, b.z, dx, dy, dz, pos[0], pos[1], pos[2], tOut, BOX_HIT_PAD);
+        const part = rayPlayer(b.x, b.y, b.z, dx, dy, dz, pos[0], pos[1], pos[2], tOut, BOX_HIT_PAD, pos[3] ? CROUCH_H : PLAYER_H);
         if (part && tOut[0] < tHit) { tHit = tOut[0]; hitP = q; head = part === 2; }
       }
       b.x += dx * tHit; b.y += dy * tHit; b.z += dz * tHit; b.dist += tHit;
@@ -534,8 +597,9 @@ export class Sim {
     this.evs.push({ k: "boom", x: +cx.toFixed(2), y: +cy.toFixed(2), z: +cz.toFixed(2) });
     for (const q of this.players.values()) {
       if (!q.alive || (q.team === b.team && q !== b.owner)) continue;
-      const d = Math.hypot(q.body.x - cx, q.body.y + 1 - cy, q.body.z - cz);
-      if (d > GRENADE_R || !lineOfSight(cx, cy, cz, q.body.x, q.body.y + 1.1, q.body.z)) continue;
+      const mid = bodyH(q.body) * 0.6;
+      const d = Math.hypot(q.body.x - cx, q.body.y + mid - cy, q.body.z - cz);
+      if (d > GRENADE_R || !lineOfSight(cx, cy, cz, q.body.x, q.body.y + mid, q.body.z)) continue;
       const dmg = Math.round(WEAPONS.grenade.dmg * (1 - d / GRENADE_R) * (q === b.owner ? 0.5 : 1));
       if (dmg > 0) this.damage(q, b.owner, dmg, false, q.body.x, q.body.y + 1.1, q.body.z, "grenade");
     }
@@ -545,6 +609,7 @@ export class Sim {
     if (!q.alive || this.time < q.protectUntil || dmg <= 0 || (q.team === by.team && q !== by)) return;
     q.hp -= dmg;
     this.evs.push({ k: "hit", by: by.id, on: q.id, dmg, head, x: +x.toFixed(2), y: +y.toFixed(2), z: +z.toFixed(2) });
+    if (q.team === 0 && by.team === 1 && this.armed < 0) this.callSite(by.body.x, by.body.z);
     if (q.brain && by !== q) {
       // whoever hits a bot has its attention, however far away: a perch is no free shooting gallery
       q.brain.alertId = by.id; q.brain.alertUntil = this.time + 5;
@@ -576,6 +641,17 @@ export class Sim {
     this.spawnSeq = [Math.floor(this.rand() * 10), Math.floor(this.rand() * 10)];
     // whoever lived through the last round keeps their launchers; the others are back to the Paczkownik
     for (const p of this.players.values()) { p.veh = -1; this.respawn(p, p.alive && !fresh); if (p.bot) this.botBuy(p); }
+    // the worker bots split evenly over A and B with one anchor on each, as a CS team sets up its defence
+    this.seenAtSite = [-99, -99];
+    const guards = [...this.players.values()].filter((p) => p.team === 0 && p.brain);
+    const first = Math.floor(this.rand() * 2);
+    guards.forEach((p, i) => { p.brain!.station = (first + i) % 2; p.brain!.anchor = i < 2; });
+    const techs = [...this.players.values()].filter((p) => p.team === 1);
+    // one technician bot in five lurks at the other point (with five or more of them); with the case it plants there
+    const tbots = techs.filter((p) => p.brain);
+    tbots.forEach((p) => { p.brain!.lurk = false; });
+    if (tbots.length >= 4) for (let k = 0; k < Math.floor(tbots.length / 5); k++) tbots[Math.floor(this.rand() * tbots.length)].brain!.lurk = true;
+    this.techFrom = techs.length ? [techs.reduce((a, p) => a + p.body.x, 0) / techs.length, techs.reduce((a, p) => a + p.body.z, 0) / techs.length] : [0, 0];
     if (this.mission === "tags") {
       const techs = [...this.players.values()].filter((p) => p.team === 1);
       const holder = techs[Math.floor(this.rand() * techs.length)];
@@ -704,6 +780,8 @@ export class Sim {
       if (!blocked(sx + ox, 0.01, sz + oz, false)) { s = { x: sx + ox, z: sz + oz }; break; }
     }
     p.body.x = s.x; p.body.y = 0; p.body.z = s.z; p.body.vx = p.body.vy = p.body.vz = 0; p.body.onGround = true;
+    p.body.crouch = false; p.body.tucked = false;
+    resetAim(p.aim); p.hspeed = 0; p.budget = MOVE_BURST;
     p.yaw = Math.atan2(s.x, s.z); // face the middle of the hall
     p.pitch = 0;
     this.leaveForklift(p, false);
@@ -726,7 +804,7 @@ export class Sim {
       // most technicians go for the point; most workers guard A or B, the rest go looking for trouble
       p.brain.job = "mission";
       p.brain.roverAt = this.rand() < 0.3 ? this.time + 20 + this.rand() * 20 : Infinity;
-      p.brain.station = Math.floor(this.rand() * 2);
+      p.brain.station = Math.floor(this.rand() * 2); p.brain.faceYaw = NaN; p.brain.faceX = NaN;
       p.brain.lane = Math.floor(this.rand() * 3) - 1; p.brain.wp = 0;
     }
   }
@@ -768,8 +846,8 @@ export class Sim {
       }
       if (p.brain && this.phase === "play") this.botTick(p, dt);
       this.touchPickups(p);
-      const idx = (p.histN % HIST) * 4;
-      p.hist[idx] = this.time; p.hist[idx + 1] = p.body.x; p.hist[idx + 2] = p.body.y; p.hist[idx + 3] = p.body.z;
+      const idx = (p.histN % HIST) * HS;
+      p.hist[idx] = this.time; p.hist[idx + 1] = p.body.x; p.hist[idx + 2] = p.body.y; p.hist[idx + 3] = p.body.z; p.hist[idx + 4] = p.body.crouch ? 1 : 0;
       p.histN++;
     }
     this.stepBoxes(dt);
@@ -800,32 +878,44 @@ export class Sim {
     const br = p.brain!;
     const cfg = DIFF[this.config.difficulty];
     const b = p.body;
-    const ex = b.x, ey = b.y + EYE_H, ez = b.z;
+    const ex = b.x, ey = b.y + eyeH(b.crouch), ez = b.z;
 
     if (this.time >= br.nextThink) {
       br.nextThink = this.time + 0.1 + this.rand() * 0.05;
       let best: Player | null = null, bestD = Infinity;
       const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
+      // a guard standing at the post holds an angle: it sees a little further and fires a little sooner at what walks
+      // into the way it watches, which is the defender's edge in CS (the attackers bring the numbers)
+      const holding = p.team === 0 && this.armed < 0 && !br.target && Number.isFinite(br.faceYaw) && Math.hypot(b.vx, b.vz) < 0.5;
       for (const q of this.players.values()) {
         if (q === p || !q.alive || q.team === p.team) continue;
         const dx = q.body.x - ex, dz = q.body.z - ez, d = Math.hypot(dx, dz);
         const alerted = q.id === br.alertId && this.time < br.alertUntil && d < 110;
-        if (d > cfg.view && !alerted) continue;
-        const heard = this.time - q.lastFire < 0.8 && d < 28;
+        if (d > cfg.view + (holding ? 15 : 0) && !alerted) continue;
+        // heard: a throw close by, or the footsteps of someone running (a walk or a crouch is silent, as for people)
+        const run = q.bot ? Math.hypot(q.body.vx, q.body.vz) : q.hspeed;
+        const heard = this.time - q.lastFire < 0.8 && d < 28 || run > STEP_SPEED && !q.body.crouch && q.veh < 0 && d < STEP_HEAR_M;
         const inFov = (dx * fx + dz * fz) / (d || 1) > -0.25;
         if (!inFov && !heard && !alerted && d > 4) continue;
-        if (!lineOfSight(ex, ey, ez, q.body.x, q.body.y + 1.3, q.body.z)) continue;
+        if (!lineOfSight(ex, ey, ez, q.body.x, q.body.y + bodyH(q.body) * 0.74, q.body.z)) continue;
         if (d < bestD) { bestD = d; best = q; }
       }
+      if (best && p.team === 0 && this.armed < 0) {
+        // a guard who sees a technician near a point calls it: the other point's guards (but its anchor) come over
+        this.callSite(best.body.x, best.body.z);
+      }
       if (best) {
-        if (br.target !== best.id) { br.target = best.id; br.reactAt = this.time + cfg.react * (0.7 + this.rand() * 0.6); }
+        if (br.target !== best.id) { if (!br.target) br.held = holding; br.target = best.id; br.reactAt = this.time + cfg.react * (holding ? 0.6 : 1) * (0.7 + this.rand() * 0.6); }
         br.seenX = best.body.x; br.seenZ = best.body.z; br.seenT = this.time;
-      } else br.target = 0;
+      } else { br.target = 0; br.held = false; }
 
       // where to walk when not fighting
       if (!best) {
         let gx = br.goalX, gz = br.goalZ, need = !br.path || br.pi >= br.path.length;
-        if (this.time - br.seenT < 4 && Math.hypot(br.seenX - b.x, br.seenZ - b.z) > 1.5) { gx = br.seenX; gz = br.seenZ; need = need || Math.hypot(gx - br.goalX, gz - br.goalZ) > 2; }
+        // (a guard before the plant does not chase beyond its point: it waits for them to come round the corner)
+        const guard = p.team === 0 && this.armed < 0 && br.job === "mission";
+        const chase = !guard || Math.hypot(br.seenX - br.goalX, br.seenZ - br.goalZ) < 10;
+        if (this.time - br.seenT < 4 && chase && Math.hypot(br.seenX - b.x, br.seenZ - b.z) > 1.5) { gx = br.seenX; gz = br.seenZ; need = need || Math.hypot(gx - br.goalX, gz - br.goalZ) > 2; }
         else if (p.hp < 45) {
           const med = this.nearestPickup(p, "med");
           if (med) { gx = med.x; gz = med.z; need = need || Math.hypot(gx - br.goalX, gz - br.goalZ) > 1; }
@@ -860,7 +950,7 @@ export class Sim {
       }
     }
 
-    let mx = 0, mz = 0, sprint = false;
+    let mx = 0, mz = 0, crouch = false;
     // at a point: a technician connects (with the case, when the mission is the tags), a worker disconnects
     const pts = sites(this.mission);
     const near = (i: number) => Math.hypot(b.x - pts[i].x, b.z - pts[i].z) <= SITE_R - 0.3;
@@ -883,7 +973,9 @@ export class Sim {
         const e = cfg.aimErr * (1 + Math.min(1.5, d / 30));
         br.errYaw = (this.rand() * 2 - 1) * e; br.errPitch = (this.rand() * 2 - 1) * e * 0.6; br.errUntil = this.time + 0.35 + this.rand() * 0.3;
       }
-      const aimY = tgt.body.y + (this.config.difficulty === "hard" && this.rand() < 0.3 ? 1.6 : 1.25) - ey;
+      // the chest, or now and then (hard) the head, of the body as it stands or crouches
+      const th = bodyH(tgt.body);
+      const aimY = tgt.body.y + (this.config.difficulty === "hard" && this.rand() < 0.3 ? th - 0.15 : th * 0.71) - ey;
       // boxes take time to arrive and drop a little: lead a moving target (how well depends on the level) and aim
       // above it by the drop over the flight
       const speed = WEAPONS[p.w].speed;
@@ -900,32 +992,41 @@ export class Sim {
       const turn = cfg.turn * dt;
       p.yaw += Math.max(-turn, Math.min(turn, dy));
       p.pitch += Math.max(-turn, Math.min(turn, wantPitch - p.pitch));
-      // strafe, close in or back off
-      // (side steps are a share of the walking pace that grows with the level, and change direction every 0.9 to 2.3 s)
-      if (this.time >= br.strafeUntil) { br.strafe = this.rand() < 0.5 ? -1 : 1; br.strafeUntil = this.time + 0.9 + this.rand() * 1.4; }
+      // strafe, close in or back off: short side steps (wider with the level) that change direction every 0.5 to 1.4 s
+      if (this.time >= br.strafeUntil) { br.strafe = this.rand() < 0.5 ? -1 : 1; br.strafeUntil = this.time + 0.5 + this.rand() * 0.9; }
       const ux = dx / (d || 1), uz = dz / (d || 1);
       const pref = p.w === "shotgun" ? 5 : 16;
       const fwd = d > pref * 1.3 ? 0.8 : d < pref * 0.5 ? -0.6 : 0;
       mx = ux * fwd + -uz * br.strafe * cfg.strafe;
       mz = uz * fwd + ux * br.strafe * cfg.strafe;
       if (!freeAt(b.x + mx * 0.8, b.z + mz * 0.8)) { br.strafe = -br.strafe; mx = ux * fwd; mz = uz * fwd; }
+      // a guard that was holding the angle keeps still for its first burst, as a player does who waits on a corner
+      if (br.held) { mx = 0; mz = 0; }
       // a technician at the server holds on to the cable and fights from there
       if (p.acting) { mx = 0; mz = 0; }
-      // fire in bursts once the reaction time has passed and the aim is close
+      // fire in bursts once the reaction time has passed and the aim is close; a burst wants a standstill, so the bot
+      // stops first (it pushes against its own drift, a counter-strafe) and only lets go once it is slow enough
+      const sp = Math.hypot(b.vx, b.vz);
+      let still = false;
       if (this.time >= br.reactAt && Math.abs(dy) < 0.12 + 0.6 / Math.max(2, d)) {
-        if (this.time < br.pauseUntil) { /* between bursts */ }
+        if (this.time < br.pauseUntil) { /* between bursts: side steps */ }
         else {
-          if (!br.burstUntil) br.burstUntil = this.time + cfg.burst * (0.6 + this.rand() * 0.8);
+          if (!br.burstUntil) {
+            br.burstUntil = this.time + cfg.burst * (0.6 + this.rand() * 0.8);
+            // hard bots now and then crouch for a burst at mid range: a smaller target, a steadier throw
+            br.crouch = d > 10 && d < 35 && this.rand() < cfg.crouch || br.held && this.rand() < cfg.holdCrouch;
+          }
           if (this.time < br.burstUntil) {
             const w = WEAPONS[p.w];
-            const cone = w.spread + (Math.hypot(b.vx, b.vz) > 1 ? w.moveSpread * 0.5 : 0);
-            if (this.time >= p.fireReady && p.mag[p.w] > 0 && !p.reloadUntil) this.fire(p, p.yaw, p.pitch, spreadDirs(p.yaw, p.pitch, cone, w.pellets, this.rand), this.time, 0);
-            if (!w.auto) br.burstUntil = Math.min(br.burstUntil, p.fireReady + 0.05);
-          } else { br.burstUntil = 0; br.pauseUntil = this.time + cfg.pause * (0.6 + this.rand() * 0.8); }
+            still = true;
+            const sight = p.w === "sniper" || (p.w === "rifle" && d > 30);
+            if (sp <= cfg.still && this.time >= p.fireReady && p.mag[p.w] > 0 && !p.reloadUntil) this.fire(p, p.yaw, p.pitch, this.time, 0, sp, !b.onGround, sight, cfg.comp);
+            if (!w.auto) br.burstUntil = Math.min(br.burstUntil, Math.max(p.fireReady, this.time + 0.15) + 0.05);
+          } else { br.burstUntil = 0; br.crouch = false; br.held = false; br.pauseUntil = this.time + cfg.pause * (0.6 + this.rand() * 0.8); }
         }
       }
-      // while a burst lasts the bot all but stops, as a player does to throw straight
-      if (br.burstUntil && this.time < br.burstUntil) { mx *= 0.25; mz *= 0.25; }
+      if (still) { if (sp > 0.4) { mx = -b.vx / sp; mz = -b.vz / sp; } else { mx = 0; mz = 0; } }
+      crouch = br.crouch;
       if (p.mag[p.w] === 0) this.startReload(p);
     } else {
       if (p.mag[p.w] < WEAPONS[p.w].mag * 0.5) this.startReload(p);
@@ -934,17 +1035,38 @@ export class Sim {
         if (Math.hypot(wx - b.x, wz - b.z) < 0.6) { br.pi++; if (br.pi < br.path.length) [wx, wz] = br.path[br.pi]; }
         if (br.pi < br.path.length) {
           const dx = wx - b.x, dz = wz - b.z, d = Math.hypot(dx, dz) || 1;
-          mx = dx / d; mz = dz / d; sprint = p.hp > 30;
+          mx = dx / d; mz = dz / d;
           let dy = Math.atan2(-mx, -mz) - p.yaw;
           while (dy > Math.PI) dy -= Math.PI * 2;
           while (dy < -Math.PI) dy += Math.PI * 2;
           p.yaw += Math.max(-4 * dt, Math.min(4 * dt, dy));
           p.pitch *= 0.9;
         }
+      } else if (p.team === 0 && this.armed < 0) {
+        // a guard at the post stands still (its first throw is then dead on) and watches the way the technicians come
+        // in: a few metres along the walk from here towards where they started
+        if (!(Math.hypot(b.x - br.faceX, b.z - br.faceZ) < 1)) {
+          br.faceX = b.x; br.faceZ = b.z; br.faceYaw = NaN;
+          const way = findPath(b.x, b.z, this.techFrom[0], this.techFrom[1]);
+          if (way) {
+            let k = 0, run = 0;
+            while (k < way.length - 1 && run < 7) { run += Math.hypot(way[k + 1][0] - way[k][0], way[k + 1][1] - way[k][1]); k++; }
+            const fx = way[k][0] - b.x, fz = way[k][1] - b.z;
+            if (Math.hypot(fx, fz) > 0.5) br.faceYaw = Math.atan2(-fx, -fz);
+          }
+        }
+        if (Number.isFinite(br.faceYaw)) {
+          let dy = br.faceYaw - p.yaw;
+          while (dy > Math.PI) dy -= Math.PI * 2;
+          while (dy < -Math.PI) dy += Math.PI * 2;
+          p.yaw += Math.max(-2.5 * dt, Math.min(2.5 * dt, dy));
+          p.pitch *= 0.9;
+        }
       }
     }
+    if (!tgt || !tgt.alive) br.crouch = false;
     const jump = br.jump; br.jump = false;
-    stepBody(b, { mx, mz, jump, sprint }, dt);
+    stepBody(b, { mx, mz, jump, crouch, speed: maxSpeed(p.w, false) }, dt);
     p.moving = Math.hypot(b.vx, b.vz) > 0.5;
   }
 
@@ -955,9 +1077,11 @@ export class Sim {
   private missionGoal(p: Player, out: number[]): boolean {
     const pts = sites(this.mission), br = p.brain!, b = p.body;
     /** A post within ~14 m of a point: kept until reached, then now and then changed. */
+    // (a guard before the plant holds its post for about a minute: one that keeps walking about never holds an angle)
     const post = (ox: number, oz: number) => {
       const has = Math.hypot(br.goalX - ox, br.goalZ - oz) < 16;
-      if (has && (Math.hypot(b.x - br.goalX, b.z - br.goalZ) > 1.5 || this.rand() > 0.02)) { out[0] = br.goalX; out[1] = br.goalZ; return true; }
+      const stay = p.team === 0 && this.armed < 0 ? 0.998 : 0.98;
+      if (has && (Math.hypot(b.x - br.goalX, b.z - br.goalZ) > 1.5 || this.rand() < stay)) { out[0] = br.goalX; out[1] = br.goalZ; return true; }
       for (let tries = 0; tries < 12; tries++) {
         const x = ox + (this.rand() - 0.5) * 26, z = oz + (this.rand() - 0.5) * 26;
         if (freeAt(x, z)) { out[0] = x; out[1] = z; return true; }
@@ -975,7 +1099,8 @@ export class Sim {
       if (this.mission === "tags" && this.caseAt && Math.hypot(this.caseAt.x - b.x, this.caseAt.z - b.z) < 70) { out[0] = this.caseAt.x; out[1] = this.caseAt.z; return true; }
       // up this round's route (the north edge of the hall, the main aisle or the south edge) as far as the west
       // racking, and only there turn for the point: the push comes from three sides, not through the middle
-      const lanes = LAYOUTS[this.layout].routes?.[this.botSite];
+      const site = br.lurk ? 1 - this.botSite : this.botSite;
+      const lanes = LAYOUTS[this.layout].routes?.[site];
       if (lanes) {
         // the depot: one of three ways through the rooms to this round's point
         const way = lanes[br.lane + 1];
@@ -985,15 +1110,24 @@ export class Sim {
       const route = lanes ? [] : br.lane === 0 ? ROUTE_MID : ROUTE_FLANK;
       while (br.wp < route.length && (b.x < route[br.wp][0] + 4 || Math.hypot(route[br.wp][0] - b.x, route[br.wp][1] * br.lane - b.z) < 7)) br.wp++;
       if (br.wp < route.length) { out[0] = route[br.wp][0]; out[1] = br.lane === 0 ? route[br.wp][1] : route[br.wp][1] * br.lane; return true; }
-      const s = pts[this.botSite];
+      const s = pts[site];
       // with the tags only the carrier goes to the point itself; the others cover it
       if (this.mission === "tags" && !p.carry) return post(s.x, s.z);
       out[0] = s.x; out[1] = s.z; return !p.acting;
     }
-    // workers: split between A and B
-    if (this.time >= br.roverAt) { br.station++; br.roverAt = this.time + 20 + this.rand() * 20; }
+    // workers: split between A and B; a call from the other point (a technician seen there in the last 20 s) brings
+    // everyone but this point's anchor over, and a rover changes over now and then
+    const st = br.station % pts.length, other = 1 - st;
+    if (!br.anchor && this.time - this.seenAtSite[other] < 20 && this.time - this.seenAtSite[st] > 6) { br.station = other; br.roverAt = Infinity; }
+    else if (this.time >= br.roverAt) { br.station++; br.roverAt = this.time + 20 + this.rand() * 20; }
     const s = pts[br.station % pts.length];
     return post(s.x, s.z);
+  }
+
+  /** A technician was seen at (x, z), or hit a worker from there: if that is close to a point, call it. */
+  private callSite(x: number, z: number) {
+    const pts = sites(this.mission);
+    for (let i = 0; i < pts.length; i++) if (Math.hypot(x - pts[i].x, z - pts[i].z) < 32) this.seenAtSite[i] = this.time;
   }
 
   private nearestPickup(p: Player, kind: PickupKind) {
@@ -1020,7 +1154,7 @@ export class Sim {
       for (const p of this.players.values()) {
         list.push({
           id: p.id, n: p.name, bot: p.bot, c: p.color, tm: p.team, g: p.group, veh: p.veh, seat: p.seat, carry: p.carry,
-          x: +p.body.x.toFixed(3), y: +p.body.y.toFixed(3), z: +p.body.z.toFixed(3), yaw: +p.yaw.toFixed(3), pitch: +p.pitch.toFixed(3),
+          x: +p.body.x.toFixed(3), y: +p.body.y.toFixed(3), z: +p.body.z.toFixed(3), yaw: +p.yaw.toFixed(3), pitch: +p.pitch.toFixed(3), crouch: !!p.body.crouch,
           hp: p.hp, alive: p.alive, w: p.w, k: p.k, d: p.d, fired: +Math.min(99, this.time - p.lastFire).toFixed(2),
         });
       }

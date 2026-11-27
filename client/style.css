@@ -151,10 +151,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #feed div .w { margin: 0 6px; opacity: 0.6; font-size: 12px; }
 #feed div.mine { color: #fff; }
 @keyframes feedIn { from { opacity: 0; transform: translateX(12px); } }
-#cross { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+/* the dynamic crosshair: game.ts sets --gap to the radius of the current throw cone on the screen */
+#cross { --gap: 4px; position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
 #cross i { position: absolute; background: rgba(255, 255, 255, 0.95); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 0 3px rgba(0, 0, 0, 0.6); border-radius: 1px; }
 #cross i:nth-child(1), #cross i:nth-child(2) { width: 2px; height: 8px; left: -1px; }
 #cross i:nth-child(3), #cross i:nth-child(4) { width: 8px; height: 2px; top: -1px; }
+#cross i:nth-child(1) { top: calc(-1 * var(--gap) - 8px); }
+#cross i:nth-child(2) { top: var(--gap); }
+#cross i:nth-child(3) { left: calc(-1 * var(--gap) - 8px); }
+#cross i:nth-child(4) { left: var(--gap); }
 #cross .dot { position: absolute; width: 2px; height: 2px; left: -1px; top: -1px; background: #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55); }
 #hitmark { position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; margin: -13px 0 0 -13px; opacity: 0; transition: opacity 0.12s; }
 #hitmark.on { opacity: 1; transition: none; }

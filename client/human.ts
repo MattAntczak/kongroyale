@@ -280,7 +280,11 @@ function onVest(y0: number, y1: number, cell: number, th = 0, half = Math.PI, se
 
 const HEAD_Y = 0.77;
 const upperGeos = new Map<number, G>(), armGeos: G[] = [];
-let legGeoC: G | null = null, caseGeoC: G | null = null;
+let thighGeoC: G | null = null, shinGeoC: G | null = null, caseGeoC: G | null = null;
+/** The knee: the leg bends here, KNEE_Y below the hip joint. */
+const KNEE_Y = 0.45;
+/** Knee to sole. */
+const SHIN = 0.47;
 
 /** Hips, jacket, head and headgear. Origin at the hips, facing -z. */
 function upperGeo(team: number, tone: number): G {
@@ -325,17 +329,23 @@ function upperGeo(team: number, tone: number): G {
   return r;
 }
 
-/** One leg, hanging from the hip joint at the origin: trousers, knee pad, reflective band, boot. */
-function legGeo(): G {
-  if (legGeoC) return legGeoC;
-  const p: G[] = [];
-  p.push(part(new THREE.CylinderGeometry(0.1, 0.078, 0.8, 8), TROUSERS, 0, -0.39, 0));
-  p.push(part(new THREE.CylinderGeometry(0.089, 0.086, 0.045, 8, 1, true), REFLECT, 0, -0.62, 0));
-  p.push(part(new THREE.BoxGeometry(0.1, 0.11, 0.03), DARK, 0, -0.42, -0.085));
-  p.push(part(new THREE.CylinderGeometry(0.088, 0.092, 0.14, 8), BOOT, 0, -0.79, 0));
-  p.push(part(new THREE.CapsuleGeometry(0.07, 0.15, 3, 8).rotateX(Math.PI / 2).scale(1, 0.9, 1), BOOT, 0, -0.85, -0.05));
-  p.push(part(new THREE.BoxGeometry(0.15, 0.03, 0.29), SOLE, 0, -0.905, -0.05));
-  return legGeoC = merged(p);
+/** The thigh, hanging from the hip joint at the origin, down to the knee. */
+function thighGeo(): G {
+  if (thighGeoC) return thighGeoC;
+  return thighGeoC = merged([part(new THREE.CylinderGeometry(0.1, 0.088, KNEE_Y + 0.03, 8), TROUSERS, 0, -KNEE_Y / 2 + 0.01, 0)]);
+}
+
+/** The shin, hanging from the knee joint at the origin: knee pad, reflective band, boot. */
+function shinGeo(): G {
+  if (shinGeoC) return shinGeoC;
+  const p: G[] = [], k = KNEE_Y;
+  p.push(part(new THREE.CylinderGeometry(0.088, 0.078, 0.36, 8), TROUSERS, 0, -0.16, 0));
+  p.push(part(new THREE.CylinderGeometry(0.089, 0.086, 0.045, 8, 1, true), REFLECT, 0, -0.62 + k, 0));
+  p.push(part(new THREE.BoxGeometry(0.1, 0.11, 0.03), DARK, 0, 0.02, -0.085));
+  p.push(part(new THREE.CylinderGeometry(0.088, 0.092, 0.14, 8), BOOT, 0, -0.79 + k, 0));
+  p.push(part(new THREE.CapsuleGeometry(0.07, 0.15, 3, 8).rotateX(Math.PI / 2).scale(1, 0.9, 1), BOOT, 0, -0.85 + k, -0.05));
+  p.push(part(new THREE.BoxGeometry(0.15, 0.03, 0.29), SOLE, 0, -0.905 + k, -0.05));
+  return shinGeoC = merged(p);
 }
 
 /** One arm, hanging from the shoulder joint at the origin: jacket sleeve, reflective band, work glove. */
@@ -366,6 +376,9 @@ export class Human {
   private hips = new THREE.Group();
   private upper = new THREE.Group();
   private legL: THREE.Group; private legR: THREE.Group;
+  private shinL: THREE.Group; private shinR: THREE.Group;
+  /** Crouched or not, and how far into the crouch the body is (0…1, eased). */
+  private crouch = false; private crouchK = 0;
   private armL: THREE.Group; private armR: THREE.Group;
   private gun: THREE.Group | null = null;
   private gunId: WeaponId | null = null;
@@ -389,7 +402,8 @@ export class Human {
       g.add(mesh(geo, mat));
       parent.add(g); return g;
     };
-    this.legL = limb(this.hips, legGeo(), -0.11, 0); this.legR = limb(this.hips, legGeo(), 0.11, 0);
+    this.legL = limb(this.hips, thighGeo(), -0.11, 0); this.legR = limb(this.hips, thighGeo(), 0.11, 0);
+    this.shinL = limb(this.legL, shinGeo(), 0, -KNEE_Y); this.shinR = limb(this.legR, shinGeo(), 0, -KNEE_Y);
     this.hips.add(this.upper);
     this.upper.add(mesh(upperGeo(tm, (colorIdx * 7 + name.length) % SKIN_TONES.length), mat));
     this.armL = limb(this.upper, armGeo(tm), -0.29, 0.55); this.armR = limb(this.upper, armGeo(tm), 0.29, 0.55);
@@ -413,6 +427,9 @@ export class Human {
     if (this.caseMesh) this.caseMesh.visible = on;
   }
 
+  /** Crouched (the pose follows in about a tenth of a second, like the player's own camera). */
+  setCrouch(on: boolean) { this.crouch = on; }
+
   setWeapon(w: WeaponId) {
     if (w === this.gunId) return;
     if (this.gun) this.armR.remove(this.gun);
@@ -433,19 +450,27 @@ export class Human {
     this.root.rotation.y = yaw;
     this.phase += dt * this.speed * 1.9;
     this.idle += dt;
-    const swing = Math.sin(this.phase) * Math.min(0.75, this.speed * 0.11);
-    this.legL.rotation.x = sit ? 1.45 : swing; this.legR.rotation.x = sit ? 1.45 : -swing;
-    // arms hold the gun up toward the aim; it bobs a little with each step
-    const aim = Math.PI / 2 + pitch + (sit ? 0 : Math.sin(this.phase * 2) * Math.min(0.035, this.speed * 0.006));
+    const ck = this.crouchK += ((this.crouch && !sit && alive ? 1 : 0) - this.crouchK) * Math.min(1, dt * 25);
+    const swing = Math.sin(this.phase) * Math.min(0.75, this.speed * 0.11) * (1 - ck * 0.6);
+    // a crouch bends the knees: the thighs come forward, the shins back, and the hips sink to where the feet still
+    // reach the floor (thigh KNEE_Y, shin and boot SHIN long)
+    const th = ck * 1.4, kn = -ck * 2.15;
+    this.legL.rotation.x = sit ? 1.45 : th + swing; this.legR.rotation.x = sit ? 1.45 : th - swing;
+    this.shinL.rotation.x = sit ? -1.4 : kn - Math.max(0, swing) * 0.6; this.shinR.rotation.x = sit ? -1.4 : kn - Math.max(0, -swing) * 0.6;
+    const lean = ck * 0.45;
+    // arms hold the gun up toward the aim (against the crouch's forward lean); it bobs a little with each step
+    const aim = Math.PI / 2 + pitch + lean + (sit ? 0 : Math.sin(this.phase * 2) * Math.min(0.035, this.speed * 0.006));
     this.armR.rotation.set(aim, 0, 0);
     this.armL.rotation.set(aim, 0, 0.45);
     this.armL.position.x = -0.22;
-    // the trunk leans into a run, turns a little against the stride and breathes when standing
+    // the trunk leans into a run (and into a crouch), turns a little against the stride and breathes when standing
     const run = sit ? 0 : Math.min(1, this.speed / 6);
-    this.upper.rotation.set(pitch * 0.25 - run * 0.07, sit ? 0 : -swing * 0.06, 0);
+    this.upper.rotation.set(pitch * 0.25 - run * 0.07 - lean, sit ? 0 : -swing * 0.06, 0);
     this.upper.position.y = Math.sin(this.idle * 1.8) * 0.004 * (1 - run);
     // (not on a forklift: a seated driver moves fast, and would bounce on the seat)
-    this.hips.position.y = 0.92 + (sit ? 0 : Math.abs(Math.cos(this.phase)) * Math.min(0.05, this.speed * 0.008));
+    const legY = KNEE_Y * Math.cos(th) + SHIN * Math.cos(th + kn);
+    this.hips.position.y = (sit ? 0.92 : legY + 0.92 - KNEE_Y - SHIN) + (sit ? 0 : Math.abs(Math.cos(this.phase)) * Math.min(0.05, this.speed * 0.008) * (1 - ck));
+    this.label.position.y = 2.15 - ck * 0.55;
     this.fall = alive ? 0 : Math.min(1, this.fall + dt * 2.5);
     this.root.rotation.x = -this.fall * Math.PI / 2 * 0.95;
     this.root.position.y = y + this.fall * 0.15;

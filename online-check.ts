@@ -38,7 +38,8 @@ async function walkTo(c: ReturnType<typeof client>, tx: number, tz: number) {
     const me = c.snap.me; let x = me.x, z = me.z;
     for (const [px, pz] of findPath(x, z, tx, tz) ?? []) {
       while (Math.hypot(px - x, pz - z) > 0.05) {
-        const d = Math.hypot(px - x, pz - z), s = Math.min(d, 0.25);
+        // 0.11 m every 25 ms: 4.4 m/s, under the host's running limit (a faster walk is sent back)
+        const d = Math.hypot(px - x, pz - z), s = Math.min(d, 0.11);
         x += (px - x) / d * s; z += (pz - z) / d * s;
         c.ws.send(JSON.stringify({ t: "state", x, y: 0, z, yaw: 0, pitch: 0, moving: true, spawn: c.snap.me.spawn }));
         await sleep(25);
@@ -65,8 +66,8 @@ console.log("forklift seen by B", vb.x.toFixed(1), "driver", vb.d === a.id, "thr
 check(vb.x > v0.x + 1 && Math.hypot(meB.x - vb.x, meB.z - vb.z) < 1.6, "the forklift moved and carried the thrower");
 // B throws a box from the platform
 const shotsBefore = b.snap.me.mag.pistol;
-b.ws.send(JSON.stringify({ t: "shoot", w: "pistol", yaw: 0, pitch: 0, dirs: [0, 0, -1], view: b.snap.time }));
-a.ws.send(JSON.stringify({ t: "shoot", w: "pistol", yaw: 0, pitch: 0, dirs: [0, 0, -1], view: a.snap.time }));
+b.ws.send(JSON.stringify({ t: "shoot", w: "pistol", yaw: 0, pitch: 0, view: b.snap.time }));
+a.ws.send(JSON.stringify({ t: "shoot", w: "pistol", yaw: 0, pitch: 0, view: a.snap.time }));
 await sleep(600);
 console.log("thrower mag", shotsBefore, "->", b.snap.me.mag.pistol, "| driver mag", a.snap.me.mag.pistol, "(driver cannot throw)");
 check(b.snap.me.mag.pistol === shotsBefore - 1 && a.snap.me.mag.pistol === 12, "only the thrower throws");

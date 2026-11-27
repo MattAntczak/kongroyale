@@ -2,7 +2,7 @@
 // own tag, your group's tags always (their UWB tags are on our network), and enemies only while they are firing —
 // or all of them while efectivo GEO runs.
 
-import { BOXES, HALL, LAYOUT, ZONES, sites } from "../shared/map";
+import { BOXES, HALL, LAYOUT, ZONES, layout, sites } from "../shared/map";
 import type { PlayerSnap } from "../shared/proto";
 import type { VehicleState } from "../shared/vehicle";
 
@@ -20,9 +20,13 @@ const hex = (c: number) => "#" + c.toString(16).padStart(6, "0");
 
 const bases: (HTMLCanvasElement | undefined)[] = [];
 
+/** A zone's wall tint (the sorting centre's), pulled most of the way to the wall grey so it stays a wall. */
+const mix = (c: number) => `rgb(${[16, 8, 0].map((s, i) => Math.round(((c >> s) & 255) * 0.45 + [0x47, 0x55, 0x69][i] * 0.55)).join(",")})`;
+
 function drawBase(): HTMLCanvasElement {
   const c = document.createElement("canvas"); c.width = W; c.height = H;
   const g = c.getContext("2d")!;
+  const sort = layout().deco !== undefined;
   g.fillStyle = "#f8fafc"; g.fillRect(0, 0, W, H);
   for (const zn of ZONES) {
     g.fillStyle = zn.color + "1a"; g.fillRect(X(zn.x0), Z(zn.z0), (zn.x1 - zn.x0) * sx, (zn.z1 - zn.z0) * sz);
@@ -31,8 +35,15 @@ function drawBase(): HTMLCanvasElement {
   for (const b of BOXES) {
     if (b.kind === "wall" && (b.x1 <= HALL.x0 || b.x0 >= HALL.x1 || b.z1 <= HALL.z0 || b.z0 >= HALL.z1)) continue;
     if (b.y0 > 2) continue;
-    g.fillStyle = b.kind === "wall" ? (b.color ? "#7ea6bd" : "#475569") : b.kind === "block" ? hex(b.color ?? 0x94a3b8) : b.climb ? "#474fff" : b.kind === "rack" ? "#cbd5e1" : b.kind === "column" || b.kind === "panel" ? "#94a3b8" : b.kind === "server" ? "#0f172a" : "#e2e8f0";
+    g.fillStyle = b.kind === "wall" ? (b.color === undefined ? "#475569" : sort ? mix(b.color) : "#7ea6bd") : b.kind === "block" ? hex(b.color ?? 0x94a3b8) : b.climb ? "#474fff" : b.kind === "rack" ? "#cbd5e1" : b.kind === "column" || b.kind === "panel" ? "#94a3b8" : b.kind === "server" ? "#0f172a" : "#e2e8f0";
     g.fillRect(X(b.x0), Z(b.z0), (b.x1 - b.x0) * sx, (b.z1 - b.z0) * sz);
+  }
+  // the sorting centre is small enough to name its rooms on the map: the point letters big, the rest small
+  if (sort) for (const zn of ZONES) {
+    const site = /^[AB] ·/.test(zn.name), name = site ? zn.name[0] : zn.name.split(" · ")[0];
+    g.font = site ? "800 30px Inter, system-ui, sans-serif" : "700 11px Inter, system-ui, sans-serif"; g.textAlign = "center"; g.textBaseline = site ? "middle" : "top";
+    g.fillStyle = site ? zn.color + "66" : "rgba(15,23,42,0.55)";
+    g.fillText(name, X((zn.x0 + zn.x1) / 2), site ? Z((zn.z0 + zn.z1) / 2) : Z(zn.z0) + 3);
   }
   return c;
 }

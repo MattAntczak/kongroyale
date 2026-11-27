@@ -137,9 +137,15 @@ export function dryFire() {
   noise(ctx.currentTime, 0.03, 4000, 3, 0.25, "bandpass");
 }
 
+/** A boot on concrete; `dist` in metres (0 = our own). Someone else's step fades out by ~25 m, a scuff of grit with
+ *  it so a near one can be placed by ear. */
 export function step(dist = 0) {
   if (!ctx) return;
-  noise(ctx.currentTime, 0.06, 180 + Math.random() * 60, 1.2, 0.18 / (1 + dist * 0.2), "lowpass", 0.06);
+  const att = dist <= 0 ? 1 : Math.max(0, 1 - dist / 26) ** 1.5;
+  if (att <= 0.01) return;
+  const t = ctx.currentTime;
+  noise(t, 0.06, 180 + Math.random() * 60, 1.2, 0.2 * att, "lowpass", 0.06);
+  noise(t + 0.01, 0.03, 2200 + Math.random() * 800, 1.5, 0.035 * att, "bandpass", 0.03);
 }
 
 /** A quiet hall: a low hum, and now and then a far forklift reversing. */

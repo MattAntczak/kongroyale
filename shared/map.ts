@@ -68,7 +68,14 @@ export interface Layout {
   servers: Point[];
   /** The two charging stations, A and B, where watch tags can be fitted (mission "tags"). */
   stations: Point[];
+  /** Pieces that are only drawn, never collide (the slides of the sorting centre's chutes). */
+  deco?: Deco[];
+  /** The room lamps as [x, z, colour], when the building brings its own (the client's point lights). */
+  lights?: [number, number, number][];
 }
+
+/** A slide from a chute's mouth in the wall (y1) down to its trough (y0); `dir` is the way it runs down: 0 +x, 1 −x, 2 −z, 3 +z. */
+export interface Deco { kind: "chute"; x0: number; x1: number; z0: number; z1: number; y0: number; y1: number; dir: 0 | 1 | 2 | 3 }
 
 /** Inner extent of the hall; the walls sit just outside it. */
 const BIG: Hall = { x0: -270, x1: 270, z0: -145, z1: 145, h: 13 };
@@ -253,12 +260,196 @@ function build(cfg: Cfg): Layout {
 }
 
 
+/** A plan drawn as open rectangles on a 1 m grid: x0, x1, z0, z1. */
+type Rect = [number, number, number, number];
+
+/**
+ * Everything of `D` that is not inside an open rectangle is solid wall, emitted as few boxes as the grid allows
+ * (runs along x merged down z). `tint` paints a wall cell (undefined: plain concrete); runs do not cross a change of paint.
+ */
+function roomWalls(D: Hall, open: readonly Rect[], tint: (x: number, z: number) => number | undefined): Box[] {
+  const GW = D.x1 - D.x0, GH = D.z1 - D.z0;
+  const solid = new Uint8Array(GW * GH).fill(1);
+  for (const [x0, x1, z0, z1] of open) for (let z = z0; z < z1; z++) for (let x = x0; x < x1; x++) solid[(z - D.z0) * GW + (x - D.x0)] = 0;
+  const paint = (i: number, j: number) => tint(i + D.x0, j + D.z0) ?? -1;
+  const boxes: Box[] = [];
+  let live = new Map<string, Box>();
+  for (let j = 0; j < GH; j++) {
+    const next = new Map<string, Box>();
+    for (let i = 0; i < GW;) {
+      if (!solid[j * GW + i]) { i++; continue; }
+      const t = paint(i, j); let e = i;
+      while (e < GW && solid[j * GW + e] && paint(e, j) === t) e++;
+      const key = `${i}:${e}:${t}`, prev = live.get(key);
+      if (prev) { prev.z1 = j + 1 + D.z0; next.set(key, prev); }
+      else { const b: Box = { kind: "wall", x0: i + D.x0, x1: e + D.x0, z0: j + D.z0, z1: j + 1 + D.z0, y0: 0, y1: D.h + 1, color: t < 0 ? undefined : t }; boxes.push(b); next.set(key, b); }
+      i = e;
+    }
+    live = next;
+  }
+  return boxes;
+}
+
 // ---------------------------------------------------------------- the sorting centre
 //
-// PLACEHOLDER: a compact arena in the manner of a CS map, still to be designed. Until then it is the depot under
-// another name, so the lobby, the host and the tests can already pick it.
+// Sortownia: a parcel sorting centre of 116 × 80 m, a compact arena in the manner of a CS defuse map (own layout).
+// The technicians start in the south, the workers in the north between the two points. Point A, the loading ramp
+// (orange), lies north-west: a dock platform, a van at the dock, parcel cages. Point B, the chutes (blue), lies
+// north-east: chutes from the upper floor, a pallet rack, gaylords. Three ways lead north:
+//  - the long way to A: out west through the yard and up a 12 m wide lane into A's south door;
+//  - the middle: a tunnel into the sorter hall (belt conveyors, a raised control room on a deck along its north
+//    wall); from there a short connector each into A and into B, and a door north to the workers;
+//  - the tight way to B: east through the sack store, a 4 m passage, the narrow chute room and B's south door.
+// The workers' room has its own doors into A (a corridor), into B and into the middle, so they rotate inside.
+//
+// Everything is drawn as in the depot (open rectangles on a 1 m grid, the rest is wall); the client recognises the
+// sorting centre's pieces by their paint (SORT_PAINT) and dresses them.
+/** Paint of the sorting centre's pieces: world.ts and the minimap recognise them by it. */
+export const SORT_PAINT = {
+  /** Belt conveyors on the floor (0.9 m) and hung overhead (bottom above 4 m). */
+  belt: 0x5b6370, overhead: 0x56606c,
+  /** A roll cage (1.2 × 0.8 m) and a big parcel cage; both full of parcels, so nobody sees through the mesh. */
+  rollCage: 0x8a939e, cage: 0x7b8794,
+  /** A gaylord (1.2 m cardboard bulk box on a pallet, one or two high), a pile of mail sacks. */
+  gaylord: 0xa0764a, sacks: 0x8d7b5f,
+  /** The bottom of a chute: a steel trough; the slide above it up to the wall is `deco`. */
+  chute: 0x9aa5b1,
+  /** The sorter deck in the middle, its stairs, its low front wall, the control room's roof. */
+  deck: 0x4a5563, steps: 0xe8b400, parapet: 0xd8d4ca, roof: 0x3a3f47, post: 0x2b2f36,
+  /** The loading dock at A and the van at it. */
+  dock: 0x80848b, van: 0xf1f3f5,
+  /** Wall tints: the walls around A and around B carry their zone's colour. */
+  wallA: 0xff8a3d, wallB: 0x3b82f6,
+} as const;
+
 function buildSort(): Layout {
-  return { ...buildDepot(), name: "Sortownia" };
+  const P = SORT_PAINT;
+  const D: Hall = { x0: -58, x1: 58, z0: -42, z1: 38, h: 9 };
+  const A: Rect = [-56, -22, -40, -10], B: Rect = [26, 56, -40, -10], MID: Rect = [-16, 18, -22, 6];
+  const CT: Rect = [-4, 24, -40, -28], T: Rect = [-12, 16, 14, 32], YARD: Rect = [-50, -16, 18, 36], LONG: Rect = [-42, -30, -8, 18];
+  const SACKS: Rect = [20, 38, 10, 30], CHUTES: Rect = [24, 46, -8, 0], CTA: Rect = [-20, -6, -38, -33];
+  const open: Rect[] = [A, B, MID, CT, T, YARD, LONG, SACKS, CHUTES, CTA,
+    [-22, -20, -37, -33], [-6, -4, -37, -33],   // A – corridor – workers
+    [24, 26, -32, -28], [8, 12, -28, -22],      // workers – B, workers – middle
+    [-22, -16, -14, -10], [18, 26, -20, -16],   // middle – A, middle – B (the connectors), offset so no line runs A to B
+    [-4, 0, 6, 14],                             // tunnel: technicians – middle
+    [-16, -12, 26, 30], [16, 20, 17, 21],       // technicians – yard, technicians – sack store
+    [-38, -34, -10, -8],                        // long lane – A
+    [28, 32, 0, 10], [36, 40, -10, -8],         // sack store – chute room (a narrow passage), chute room – B
+  ];
+  const boxes = roomWalls(D, open, (x, z) => z < -8 ? (x < -20 ? P.wallA : x > 24 ? P.wallB : undefined) : undefined);
+
+  const keep: [number, number, number][] = [];
+  const free = (x: number, z: number, m: number) => {
+    for (const b of boxes) if (b.y0 < 2 && x + m > b.x0 && x - m < b.x1 && z + m > b.z0 && z - m < b.z1) return false;
+    for (const [kx, kz, kr] of keep) if (Math.abs(kx - x) < kr + m && Math.abs(kz - z) < kr + m) return false;
+    return true;
+  };
+  const blk = (x0: number, x1: number, z0: number, z1: number, y0: number, y1: number, color: number) => { boxes.push({ kind: "block", x0, x1, z0, z1, y0, y1, color }); };
+  /** A painted piece centred on (x, z), sx × sz, standing on the floor. */
+  const put = (color: number, x: number, z: number, sx: number, sz: number, h: number) => blk(x - sx / 2, x + sx / 2, z - sz / 2, z + sz / 2, 0, h, color);
+  const add = (kind: BoxKind, cx: number, cz: number, sx: number, sz: number, h: number) => { boxes.push({ kind, x0: cx - sx / 2, x1: cx + sx / 2, z0: cz - sz / 2, z1: cz + sz / 2, y0: 0, y1: h }); };
+  /** A pallet stack: 1, 2 or 3 layers (1.25 m each; one layer can be jumped onto, two cannot). */
+  const stack = (x: number, z: number, layers: number, big = false) => add("stack", x, z, big ? 2.4 : 1.4, big ? 2.0 : 1.2, 1.25 * layers);
+  /** A row of `n` roll cages along x (or z), 0.2 m apart. */
+  const rollCages = (x: number, z: number, n: number, alongX: boolean) => {
+    for (let i = 0; i < n; i++) alongX ? put(P.rollCage, x + i * 1.4, z, 1.2, 0.8, 1.8) : put(P.rollCage, x, z + i * 1.0, 1.2, 0.8, 1.8);
+  };
+  const gaylord = (x: number, z: number, high: boolean) => put(P.gaylord, x, z, 1.2, 1.2, high ? 2.2 : 1.1);
+
+  // points A and B
+  const servers = [{ x: -38, z: -24 }, { x: 35, z: -28 }];
+  for (const sv of servers) add("server", sv.x, sv.z, 1.0, 1.0, 2.1);
+  const stations = [{ x: -36, z: -31 }, { x: 44, z: -22 }];
+  for (const st of stations) keep.push([st.x, st.z, 3]);
+  for (const sv of servers) keep.push([sv.x, sv.z, 2.5]);
+
+  // spawns: the technicians in the south room, the workers in the north room
+  const tSpawns: [number, number][] = [], wSpawns: [number, number][] = [];
+  for (const z of [17.5, 21, 25, 28.5]) for (const x of [-8, -4, 0, 9.5, 13]) tSpawns.push([x, z]);
+  for (const z of [-38, -35, -32, -29.5]) for (const x of [0, 3.5, 7, 10.5, 14]) wSpawns.push([x, z]);
+  for (const [x, z] of [...tSpawns, ...wSpawns]) keep.push([x, z, 1.5]);
+  const vehicles = [{ x: -27, z: 31, yaw: 0 }, { x: 19.5, z: -37, yaw: Math.PI }];
+  for (const v of vehicles) keep.push([v.x, v.z, 2.6]);
+
+  // A, the loading ramp: a dock platform along the north wall (1.2 m: a jump, or the steps at its east end), two dock
+  // doors behind it, the van backed up to it, parcel cages and pallets of different heights
+  blk(-56, -38, -40, -35, 0, 1.2, P.dock);
+  for (let k = 3; k >= 1; k--) blk(-38 + (3 - k) * 0.6, -37.4 + (3 - k) * 0.6, -40, -35, 0, k * 0.3, P.dock);
+  for (const x of [-51, -44]) blk(x - 1.6, x + 1.6, -40, -39.8, 0, 3.8, 0xc9ccd2);
+  blk(-50.6, -48.4, -35, -29.4, 0, 2.5, P.van);
+  put(P.cage, -41, -30.5, 3, 2, 2.4); put(P.cage, -28, -15, 2, 4, 2.4); put(P.cage, -26.5, -35, 2, 4.4, 2.4);
+  stack(-46, -15, 2, true); stack(-53, -22, 1, true); stack(-33, -13.5, 2); stack(-27, -28.5, 1);
+  rollCages(-50, -25, 3, true); gaylord(-32, -27, true); gaylord(-30.8, -27, false);
+
+  // B, the chutes: four chutes come down the east wall into steel troughs, a pallet rack along the north wall,
+  // gaylords and a parcel cage on the floor
+  const deco: Deco[] = [];
+  for (const z of [-35, -28, -21, -14]) { blk(51.6, 56, z - 0.8, z + 0.8, 0, 1.1, P.chute); deco.push({ kind: "chute", x0: 53.2, x1: 56, z0: z - 0.8, z1: z + 0.8, y0: 1.1, y1: 4.6, dir: 1 }); }
+  boxes.push({ kind: "rack", x0: 30, x1: 48, z0: -40, z1: -37.6, y0: 0, y1: 4.6 }); // low, so the zone sign shows above it
+  put(P.cage, 41, -31, 2, 3, 2.4); gaylord(33, -22, true); gaylord(34.2, -22, false); gaylord(45, -13.5, false); gaylord(49, -27, true);
+  stack(30.5, -18, 2, true); gaylord(31, -20.6, true); stack(32, -13, 1); stack(42, -18, 2); rollCages(29.5, -26, 2, false); gaylord(29.5, -30.6, true); gaylord(31.5, -27.4, true);
+
+  // the middle, the sorter hall: a deck along the north wall (2.7 m) with stairs at both ends; its west part is the
+  // control room under a roof. A low front wall to crouch behind, belt conveyors on the floor, two more overhead
+  const STEP = 0.3, RUN = 0.6, DECK = 2.7;
+  blk(-16, 4, -22, -17, 0, DECK, P.deck); blk(-16, -14, -17, -14, 0, DECK, P.deck); // the deck, and a switch cabinet beside the west stairs
+  for (const [sx0, sx1] of [[-14, -11.6], [1.6, 4]]) for (let k = 8; k >= 1; k--) {
+    const z0 = -17 + (8 - k) * RUN;
+    blk(sx0, sx1, z0, z0 + RUN, 0, k * STEP, P.steps);
+  }
+  blk(-11.6, 1.6, -17.3, -17, DECK, DECK + 1.05, P.parapet);
+  blk(-16, -3, -22, -16.8, 5.3, 5.5, P.roof); blk(-15.6, -6.4, -22, -21.35, DECK, DECK + 0.85, P.post); // the control room: a roof, a desk under the screens
+  for (const x of [-11.75, -3.15]) blk(x - 0.15, x + 0.15, -17.3, -17, DECK + 1.05, 5.3, P.post);
+  put(P.belt, -8, -9, 10, 1.2, 0.9); put(P.belt, 8.5, -9, 13, 1.2, 0.9);
+  put(P.belt, -9.5, -1, 5, 1.2, 0.9); put(P.belt, 7, -1, 8, 1.2, 0.9);
+  blk(-16, 18, -4.6, -3.4, 5.2, 5.8, P.overhead); blk(13.4, 14.6, -22, 6, 6.2, 6.8, P.overhead);
+  put(P.cage, -8, -11.2, 3, 2, 2.4); add("table", 11, -13, 2.4, 1.2, 0.95);
+  stack(-8, 3, 1); stack(3.5, 3.2, 2, true); gaylord(14, -16.5, true); put(P.cage, -9, -6.5, 3, 2, 2.4); put(P.cage, 7, -12.5, 2, 3, 2.4); gaylord(-1, -5.5, true); rollCages(15, -5.5, 2, false);
+
+  // the workers' room, the technicians' room
+  rollCages(-2.5, -39.2, 1, true); stack(21.5, -31.3, 2); gaylord(-2.5, -29.5, false);
+  stack(4.5, 24, 2, true); gaylord(4.5, 18, false); gaylord(4.5, 28.5, true); stack(-10, 31, 1, true); gaylord(14.5, 30.8, true);
+
+  // the yard: dock doors in the south wall, pallets and gaylords; the long lane: cover in turns from wall to wall,
+  // so no single spot sees from the yard into A
+  for (const x of [-44, -36]) blk(x - 1.6, x + 1.6, 35.8, 36, 0, 3.8, 0xc9ccd2);
+  stack(-46, 22, 2, true); stack(-35, 24.5, 2, true); stack(-20, 33, 1, true); stack(-19.5, 29.6, 2); gaylord(-38, 27, true); gaylord(-36.8, 27, false); gaylord(-30.4, 30.5, true); stack(-22, 20, 1);
+  stack(-39.5, 11, 2, true); put(P.cage, -32.5, 4, 2, 3, 2.4); rollCages(-40.5, -2, 3, false); stack(-32, -5, 1);
+
+  // the sack store and the chute room: piles of mail sacks, chutes from the south wall of the chute room
+  put(P.sacks, 24, 26, 4, 2, 1.2); put(P.sacks, 34.5, 23, 2, 4, 1.4); put(P.sacks, 25, 15, 3, 2, 0.9); stack(35, 13, 2); gaylord(22, 20.5, false);
+  for (const x of [42.5, 26]) { blk(x - 0.8, x + 0.8, -2.6, 0, 0, 1.1, P.chute); deco.push({ kind: "chute", x0: x - 0.8, x1: x + 0.8, z0: -1.4, z1: 0, y0: 1.1, y1: 4.2, dir: 2 }); }
+  put(P.sacks, 44, -6, 2, 2.4, 1.2);
+
+  const pickups: PickupSpot[] = [];
+  const pick = (kind: PickupKind, x: number, z: number) => { if (free(x, z, 1.2)) { pickups.push({ kind, x, z }); keep.push([x, z, 1.6]); } };
+  for (const [k, x, z] of [
+    ["med", -36, 15], ["ammo", 29, 20], ["med", -1, -14], ["geo", 16, -11], ["ammo", -46, 31], ["med", 18, -32], ["ammo", -13, -35.5],
+  ] as [PickupKind, number, number][]) pick(k, x, z);
+
+  const zones: Zone[] = [
+    { name: "A · RAMPA", color: "#FF8A3D", x0: A[0], x1: A[1], z0: A[2], z1: A[3] },
+    { name: "B · ZSYPY", color: "#3B82F6", x0: B[0], x1: B[1], z0: B[2], z1: B[3] },
+    { name: "ŚRODEK · SORTER", color: "#94A3B8", x0: MID[0], x1: MID[1], z0: MID[2], z1: MID[3] },
+    { name: "DŁUGA A", color: "#F59E0B", x0: LONG[0], x1: LONG[1], z0: LONG[2], z1: LONG[3] },
+    { name: "PLAC", color: "#10B981", x0: YARD[0], x1: YARD[1], z0: YARD[2], z1: YARD[3] },
+    { name: "WORKOWNIA", color: "#38BDF8", x0: SACKS[0], x1: SACKS[1], z0: SACKS[2], z1: SACKS[3] },
+    { name: "RYNNY", color: "#60A5FA", x0: CHUTES[0], x1: CHUTES[1], z0: CHUTES[2], z1: CHUTES[3] },
+    { name: "TECHNICY", color: "#474FFF", x0: T[0], x1: T[1], z0: T[2], z1: T[3] },
+    { name: "PRACOWNICY", color: "#FF6A00", x0: CT[0], x1: CT[1], z0: CT[2], z1: CT[3] },
+  ];
+  // the technicians' bots: for each point the long (or tight) way, the middle, and a deep flank through the workers' doors
+  const routes: [number, number][][][] = [
+    [[[-14, 28], [-30, 21], [-36, 15], [-36, -3], [-36, -13]], [[-2, 12], [-6, -6], [-19, -12], [-27, -12]], [[-2, 12], [3, -12], [10, -25], [5, -35], [-13, -35.5], [-25, -35]]],
+    [[[18, 19], [30, 13], [30, -2], [38, -6], [38, -13]], [[-2, 12], [4, -8], [16, -18], [22, -18], [28, -18]], [[-2, 12], [1.5, -3], [10, -16], [10, -25], [18, -31], [28, -30]]],
+  ];
+  const lights: [number, number, number][] = [[-40, -25, 0xffe2bf], [41, -25, 0xcfe2ff], [1, -8, 0xfff1dc], [2, 23, 0xfff1dc], [-36, 14, 0xffe9c8], [31, 10, 0xf2f4ff]];
+  return {
+    name: "Sortownia", kind: "depot", hall: D, boxes, ladders: [], zones, servers, stations,
+    spawns: [...wSpawns, ...tSpawns], teamSpawns: [wSpawns, tSpawns], routes, roundS: 115,
+    pickups, vehicles, anchors: anchorsFor(D, 30), docks: [], deco, lights,
+  };
 }
 
 // ---------------------------------------------------------------- the railway depot
@@ -272,7 +463,7 @@ function buildSort(): Layout {
 // The building is drawn as open rectangles (rooms and doorways) on a 1 m grid; everything else is solid wall.
 function buildDepot(): Layout {
   const D: Hall = { x0: -92, x1: 92, z0: -60, z1: 60, h: 8 };
-  type R = [number, number, number, number]; // x0, x1, z0, z1
+  type R = Rect;
   const A: R = [-88, -40, -44, -10], CONT: R = [-88, -40, -8, 30], TROOM: R = [-88, -62, 32, 58], TPASS: R = [-62, -40, 40, 54];
   const YARD: R = [-40, 58, 34, 58], CENTRE: R = [-38, 30, -30, 22], NCORR: R = [-38, 40, -52, -32], WORK: R = [42, 68, -58, -34];
   const OFFICE: R = [70, 88, -54, -40], PACK: R = [32, 68, -30, -16], B: R = [32, 70, -14, 18], SECORR: R = [32, 80, 20, 32], CT: R = [60, 88, 34, 58];
@@ -292,27 +483,9 @@ function buildDepot(): Layout {
     [82, 86, -40, -36], [74, 78, -22, -20], [84, 88, -4, -2], // offices – chambers, between the chambers
     [70, 72, -14, -10], [56, 60, -16, -14],         // cold store – chambers, cold store – packing
   ];
-  const GW = D.x1 - D.x0, GH = D.z1 - D.z0;
-  const solid = new Uint8Array(GW * GH).fill(1);
-  for (const [x0, x1, z0, z1] of open) for (let z = z0; z < z1; z++) for (let x = x0; x < x1; x++) solid[(z - D.z0) * GW + (x - D.x0)] = 0;
   // the walls of the cold store and its chambers are insulated panels: a cold tint
   const COLD = 0xbfe3f5;
-  const tint = (i: number, j: number) => { const x = i + D.x0, z = j + D.z0; return x >= 30 && z >= -38 && z < 20 ? 2 : 1; };
-  const boxes: Box[] = [];
-  let live = new Map<string, Box>();
-  for (let j = 0; j < GH; j++) {
-    const next = new Map<string, Box>();
-    for (let i = 0; i < GW;) {
-      if (!solid[j * GW + i]) { i++; continue; }
-      const t = tint(i, j); let e = i;
-      while (e < GW && solid[j * GW + e] && tint(e, j) === t) e++;
-      const key = `${i}:${e}:${t}`, prev = live.get(key);
-      if (prev) { prev.z1 = j + 1 + D.z0; next.set(key, prev); }
-      else { const b: Box = { kind: "wall", x0: i + D.x0, x1: e + D.x0, z0: j + D.z0, z1: j + 1 + D.z0, y0: 0, y1: D.h + 1, color: t === 2 ? COLD : undefined }; boxes.push(b); next.set(key, b); }
-      i = e;
-    }
-    live = next;
-  }
+  const boxes = roomWalls(D, open, (x, z) => x >= 30 && z >= -38 && z < 20 ? COLD : undefined);
 
   const keep: [number, number, number][] = [];
   const free = (x: number, z: number, m: number) => {

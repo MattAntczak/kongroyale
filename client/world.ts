@@ -7,7 +7,7 @@
 
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { BOXES, HALL, LADDERS, PICKUPS, ZONES, layout, type PickupKind } from "../shared/map";
+import { BOXES, HALL, LADDERS, PICKUPS, SORT_PAINT, ZONES, layout, type Box, type PickupKind } from "../shared/map";
 import type { Mission } from "../shared/proto";
 import { gunModel } from "./human";
 
@@ -217,6 +217,16 @@ function floorTexture(doors: Door[], lamps: [number, number][]) {
       const tx = X(zn.x0) + (depot ? 1.1 : 0.8) * PX, tz = Z(zn.z0) + (zn.name.startsWith("STREFA") ? 1.3 : depot ? 1.0 : 0.6) * PX;
       g.fillText(zn.name, tx, tz);
     }
+    // the sorting centre: each point's floor painted in its colour, with its letter 9 m tall
+    if (layout().deco) for (const zn of ZONES) {
+      if (!/^[AB] ·/.test(zn.name)) continue;
+      const cx = X((zn.x0 + zn.x1) / 2), cz = Z((zn.z0 + zn.z1) / 2);
+      g.fillStyle = zn.color + "24"; g.fillRect(X(zn.x0), Z(zn.z0), (zn.x1 - zn.x0) * PX, (zn.z1 - zn.z0) * PX);
+      g.font = `800 ${Math.round(9 * PX)}px Inter, -apple-system, sans-serif`; g.textAlign = "center"; g.textBaseline = "middle";
+      g.strokeStyle = zn.color + "b0"; g.lineWidth = 0.18 * PX; g.strokeText(zn.name[0], cx + 5 * PX, cz + 3 * PX);
+      g.fillStyle = zn.color + "40"; g.fillText(zn.name[0], cx + 5 * PX, cz + 3 * PX);
+      g.textAlign = "left"; g.textBaseline = "top";
+    }
     // pickup pads
     for (const p of PICKUPS) {
       g.strokeStyle = "rgba(71,79,255,0.75)"; g.lineWidth = 1.5;
@@ -231,7 +241,7 @@ function floorTexture(doors: Door[], lamps: [number, number][]) {
  * One wall texture for 6 m of wall, bottom to top (v = 0 at the floor, 1 at the top of the wall). Plain walls are
  * painted precast concrete with a dark plinth and an efectivo-blue line; the cold store has white insulated panels.
  */
-function wallTexture(cold: boolean) {
+function wallTexture(cold: boolean, band?: string) {
   const W = 512, H = 1024, wallH = HALL.h + 1, my = H / wallH, mx = W / 6, Y = (m: number) => H - m * my;
   return canvasTex(W, H, (g) => {
     // a blotch that wraps around the left and right edge, so the texture tiles along the wall
@@ -285,6 +295,11 @@ function wallTexture(cold: boolean) {
     g.fillStyle = fl; g.fillRect(0, Y(0.3), W, 0.3 * my);
     g.fillStyle = "#474fff"; g.fillRect(0, Y(1.14), W, 0.14 * my);
     g.fillStyle = "rgba(255,255,255,0.2)"; g.fillRect(0, Y(1.14), W, 1.5);
+    if (band) {
+      // the sorting centre paints the walls of a point in its colour: a broad band at eye height, a thin one above
+      g.fillStyle = band; g.fillRect(0, Y(2.3), W, 0.9 * my); g.fillRect(0, Y(2.62), W, 0.12 * my);
+      g.fillStyle = "rgba(255,255,255,0.18)"; g.fillRect(0, Y(2.3), W, 2); g.fillStyle = "rgba(0,0,0,0.25)"; g.fillRect(0, Y(1.4), W, 2);
+    }
     noise(g, W, H, 0.05, 7000);
   }, [1, 1]);
 }
@@ -612,6 +627,8 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
   scene.add(group);
 
   const depot = layout().kind === "depot";
+  /** The sorting centre: a depot-kind building with its own pieces (shared/map.ts SORT_PAINT, `deco`). */
+  const sort = layout().deco !== undefined;
   const solid = depot ? wallGrid() : null;
   const doors = solid ? findDoors(solid) : [];
   const lampAt = lampSpots(solid);
@@ -642,14 +659,16 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
   // in the layout, and gets white insulated panels. The texture is laid in metres, so it runs on from box to box.
   const wallH = HALL.h + 1;
   const walls = new BoxBatch(6, wallH), coldWalls = new BoxBatch(6, wallH);
-  for (const b of BOXES) if (b.kind === "wall") (b.color !== undefined ? coldWalls : walls).add(b.x0, b.y0, b.z0, b.x1, b.y1, b.z1, false);
+  // in the sorting centre a tint is a zone's colour: one batch per colour, each with its own band
+  const banded = new Map<number, BoxBatch>();
+  const wallBatch = (c: number | undefined) => c === undefined ? walls : !sort ? coldWalls : banded.get(c) ?? banded.set(c, new BoxBatch(6, wallH)).get(c)!;
+  for (const b of BOXES) if (b.kind === "wall") wallBatch(b.color).add(b.x0, b.y0, b.z0, b.x1, b.y1, b.z1, false);
   // The doorways are cut through the walls up to the roof. A lintel above 4.3 m turns each slot into a gate; it has no
   // collision (nothing in the game flies that high through a doorway on purpose), like everything else hung above 2.5 m.
   const LINTEL = 4.3;
   for (const d of doors) {
     const cx = (d.x0 + d.x1) / 2, cz = (d.z0 + d.z1) / 2, px = d.alongZ ? d.x0 - 0.5 : cx, pz = d.alongZ ? cz : d.z0 - 0.5;
-    const cold = BOXES.some((b) => b.kind === "wall" && b.color !== undefined && px > b.x0 && px < b.x1 && pz > b.z0 && pz < b.z1);
-    (cold ? coldWalls : walls).add(d.x0, LINTEL, d.z0, d.x1, wallH, d.z1, false, true);
+    wallBatch(BOXES.find((b) => b.kind === "wall" && px > b.x0 && px < b.x1 && pz > b.z0 && pz < b.z1)?.color).add(d.x0, LINTEL, d.z0, d.x1, wallH, d.z1, false, true);
     // a yellow/black edge on both faces of the wall: up the jambs (where the wall is flush there) and under the lintel
     const T = 0.02, S = 0.3;
     for (const s of [-1, 1]) {
@@ -669,6 +688,7 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
   walls.build(group, new THREE.MeshStandardMaterial({ map: wallTexture(false), roughness: 0.85, metalness: 0 }));
   // tinted down a little: the white panels sit next to the lamps and were close to clipping
   if (depot) coldWalls.build(group, new THREE.MeshStandardMaterial({ map: wallTexture(true), color: 0xd9dfe6, roughness: 0.4, metalness: 0.15 }));
+  for (const [c, batch] of banded) batch.build(group, new THREE.MeshStandardMaterial({ map: wallTexture(false, "#" + c.toString(16).padStart(6, "0")), roughness: 0.85, metalness: 0 }));
   const lineMat = new THREE.MeshStandardMaterial({ color: 0xe5b50a, roughness: 0.6 });
 
   // dock doors: a sectional door in a dark frame, its number, a signal lamp and two rubber bumpers. `ry` is the way the
@@ -731,8 +751,10 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
     const steps = BOXES.filter((b) => b.kind === "block" && b.color === YELLOW && b.y0 === 0 && b.y1 < 3);
     let dockNo = 0;
 
+    const sortKit = sort ? sortDresser({ blocks, glow, decals, hazard, loads, wheels, glass, solid: solid!, logoDark }) : null;
     for (const b of BOXES) {
       if (b.kind !== "block") continue;
+      if (sortKit?.dress(b)) continue;
       const sx = b.x1 - b.x0, sz = b.z1 - b.z0, cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, c = b.color ?? 0x94a3b8;
       const h = b.y1 - b.y0, long = Math.max(sx, sz), short = Math.min(sx, sz), alongX = sx >= sz, grounded = b.y0 === 0;
       if (grounded && near(short, 2.6) && near(long, 12) && (near(h, 2.6) || near(h, 5.2))) {
@@ -886,6 +908,7 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
       pipes.add(mid, 6.3, zn.z1 - 0.14, wide - 0.4, 0.1, 0.1, 0xb23a2e);
     }
 
+    if (sortKit) { sortKit.build(group); sortSigns(decals, blocks, doors, LINTEL); }
     containers.build(group); wheels.build(group); glass.build(group); pipes.build(group);
     metal.build(group, new THREE.MeshStandardMaterial({ map: treadTexture(), roughness: 0.5, metalness: 0.6 }), true);
     wood.build(group, new THREE.MeshStandardMaterial({ map: plankTexture(), roughness: 0.9 }), true);
@@ -1161,6 +1184,277 @@ export function buildWorld(scene: THREE.Scene, mission: Mission): WorldHandle {
     },
     setPickups(active: boolean[]) { for (let i = 0; i < pickups.length; i++) pickups[i].visible = !!active[i]; },
   };
+}
+
+// ------------------------------------------------------------------ the sorting centre
+
+interface SortKit { blocks: Instancer; glow: Instancer; decals: Decals; hazard: BoxBatch; loads: Instancer[]; wheels: Instancer; glass: Instancer; solid: (x: number, z: number) => boolean; logoDark: Region }
+
+/**
+ * Dresses the sorting centre's painted boxes (shared/map.ts SORT_PAINT): belt conveyors, roll cages and parcel cages
+ * full of parcels, gaylords, mail sacks, chute troughs and their slides, the sorter deck with its stairs, low wall and
+ * control room, the loading dock and the van. `dress` takes a box it knows and returns true; `build` adds the
+ * pieces that have their own material. Everything repeated goes through the shared instancers.
+ */
+function sortDresser(k: SortKit) {
+  const P = SORT_PAINT, { blocks, glow, decals, hazard, loads, wheels, glass, solid } = k;
+  const any = <T,>(a: readonly T[]) => a[Math.floor(Math.random() * a.length)];
+  const YELLOW = 0xf2c200, DARK = 0x1b1d22, STEEL = 0x8f99a6, PALLET = 0x9c7a50;
+  const cageMesh = new BoxBatch(1.2, 1.2), tread = new BoxBatch(1, 1);
+  const sacks = new Instancer(new THREE.SphereGeometry(0.5, 10, 6).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 }));
+  const SACK = [0xcfc6b0, 0xb9ae94, 0x9fa6ad, 0xd9d4c8, 0x8f8a7c, 0x7f93a8];
+  const box = (b: Box, c: number) => blocks.add((b.x0 + b.x1) / 2, b.y0, (b.z0 + b.z1) / 2, b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0, c);
+  const stencil = (text: string, bg: string, fg: string) => decals.region(252, 52, (g, w, h) => {
+    g.fillStyle = bg; g.fillRect(0, 0, w, h); g.fillStyle = fg; g.font = "700 34px Inter, -apple-system, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(text, w / 2, h / 2 + 2, w - 12);
+  });
+  const sterownia = stencil("STEROWNIA", "#14161a", "#f5f5f7");
+  const screen = decals.region(124, 76, (g, w, h) => {
+    g.fillStyle = "#0b0d12"; g.fillRect(0, 0, w, h); g.fillStyle = "#1d2230"; g.fillRect(5, 5, w - 10, h - 10);
+    for (let i = 0; i < 9; i++) { g.fillStyle = ["#3B82F6", "#FF8A3D", "#10B981", "#94A3B8"][i % 4]; g.fillRect(12 + i * 11, h - 14 - (i * 37 % 40), 7, (i * 37 % 40) + 4); }
+    g.fillStyle = "#6EE7B7"; g.font = "600 11px Menlo, monospace"; g.fillText("SORTER ● 4 812/h", 10, 18);
+  });
+  const mouth = decals.region(124, 92, (g, w, h) => {
+    g.fillStyle = "#e5b50a"; g.fillRect(0, 0, w, h); g.fillStyle = "#111"; for (let x = -h; x < w; x += 18) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x + 9, 0); g.lineTo(x + 9 + h, h); g.lineTo(x + h, h); g.fill(); }
+    g.fillStyle = "#0a0b0d"; g.fillRect(10, 10, w - 20, h - 14);
+    for (let x = 12; x < w - 12; x += 9) { g.fillStyle = "rgba(60,64,72,0.9)"; g.fillRect(x, 10, 7, h - 30); } // a rubber curtain in strips
+  });
+
+  /** Parcels filling a volume: a grid of cardboard boxes, a little smaller than their cells, the top layer ragged. */
+  const fill = (x0: number, x1: number, y0: number, y1: number, z0: number, z1: number) => {
+    const nx = Math.max(1, Math.round((x1 - x0) / 0.5)), ny = Math.max(1, Math.round((y1 - y0) / 0.45)), nz = Math.max(1, Math.round((z1 - z0) / 0.45));
+    const cx = (x1 - x0) / nx, cy = (y1 - y0) / ny, cz = (z1 - z0) / nz;
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) for (let m = 0; m < nz; m++) {
+      const top = j === ny - 1;
+      if (top && Math.random() < 0.3) continue;
+      any(loads).add(x0 + (i + 0.5) * cx, y0 + j * cy, z0 + (m + 0.5) * cz, cx * (0.84 + Math.random() * 0.12), cy * (top ? 0.45 + Math.random() * 0.5 : 0.97), cz * (0.84 + Math.random() * 0.12), 0xffffff, (Math.random() - 0.5) * 0.2);
+    }
+  };
+  /** A hand rail from (x0, z0) to (x1, z1) standing on height y: posts, a top and a knee rail. Thin, no collision. */
+  const rail = (x0: number, z0: number, x1: number, z1: number, y: number) => {
+    const len = Math.hypot(x1 - x0, z1 - z0), n = Math.max(1, Math.round(len / 2)), ax = x1 !== x0;
+    for (let i = 0; i <= n; i++) blocks.add(x0 + (x1 - x0) * i / n, y, z0 + (z1 - z0) * i / n, 0.05, 1.05, 0.05, YELLOW);
+    for (const dy of [0.55, 1.03]) blocks.add((x0 + x1) / 2, y + dy, (z0 + z1) / 2, ax ? len : 0.04, 0.05, ax ? 0.04 : len, YELLOW);
+  };
+  /** Rails along every open edge of a raised top: none where a wall, the stairs or a low wall on the top meet the edge. */
+  const edgeRails = (b: Box) => {
+    const sides: [number, number, number, number, number, number][] = [[b.x0, b.z0, b.x1, b.z0, 0, -1], [b.x0, b.z1, b.x1, b.z1, 0, 1], [b.x0, b.z0, b.x0, b.z1, -1, 0], [b.x1, b.z0, b.x1, b.z1, 1, 0]];
+    for (const [ax, az, bx, bz, nx, nz] of sides) {
+      const len = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.round(len / 0.5));
+      const open = (t: number) => {
+        const x = ax + (bx - ax) * t, z = az + (bz - az) * t, ox = x + nx * 0.3, oz = z + nz * 0.3, ix = x - nx * 0.15, iz = z - nz * 0.15;
+        if (solid(ox, oz)) return false;
+        for (const o of BOXES) {
+          if (o === b || o.kind === "wall") continue;
+          if (ox > o.x0 && ox < o.x1 && oz > o.z0 && oz < o.z1 && o.y0 < b.y1 && o.y1 > b.y1 - 1) return false;
+          if (ix > o.x0 && ix < o.x1 && iz > o.z0 && iz < o.z1 && Math.abs(o.y0 - b.y1) < 0.05) return false;
+        }
+        return true;
+      };
+      let from = -1;
+      for (let i = 0; i <= n; i++) {
+        const o = i < n && open((i + 0.5) / n);
+        if (o && from < 0) from = i;
+        if (!o && from >= 0) {
+          const t0 = from / n, t1 = i / n, ix = -nx * 0.04, iz = -nz * 0.04;
+          rail(ax + (bx - ax) * t0 + ix, az + (bz - az) * t0 + iz, ax + (bx - ax) * t1 + ix, az + (bz - az) * t1 + iz, b.y1);
+          from = -1;
+        }
+      }
+    }
+  };
+
+  const belt = (b: Box, overhead: boolean) => {
+    const sx = b.x1 - b.x0, sz = b.z1 - b.z0, cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, alongX = sx >= sz, long = Math.max(sx, sz), short = Math.min(sx, sz);
+    const top = b.y1;
+    box(b, 0x4d535c);
+    // side rails 1 cm proud of the frame, a rubber belt on top, yellow guards on the ends
+    for (const s of [-1, 1]) blocks.add(alongX ? cx : cx + s * (short / 2 + 0.005), top - 0.2, alongX ? cz + s * (short / 2 + 0.005) : cz, alongX ? long + 0.02 : 0.04, 0.26, alongX ? 0.04 : long + 0.02, 0x2b2f36);
+    blocks.add(cx, top, cz, alongX ? long - 0.16 : short - 0.24, 0.025, alongX ? short - 0.24 : long - 0.16, 0x17181b);
+    for (const s of [-1, 1]) blocks.add(alongX ? cx + s * (long / 2 + 0.01) : cx, top - 0.28, alongX ? cz : cz + s * (long / 2 + 0.01), alongX ? 0.04 : short + 0.04, 0.34, alongX ? short + 0.04 : 0.04, YELLOW);
+    if (overhead) {
+      // hung from the roof every 3 m, a striped guard along the bottom edge
+      hazard.add(b.x0 - 0.01, b.y0, b.z0 - 0.01, b.x1 + 0.01, b.y0 + 0.14, b.z1 + 0.01, false, true);
+      for (let t = 1.5; t < long; t += 3) for (const s of [-1, 1]) {
+        const x = alongX ? b.x0 + t : cx + s * (short / 2 - 0.06), z = alongX ? cz + s * (short / 2 - 0.06) : b.z0 + t;
+        blocks.add(x, top, z, 0.05, HALL.h + 0.6 - top, 0.05, DARK);
+      }
+    } else for (let t = 0.6; t < long; t += 1.8) blocks.add(alongX ? b.x0 + t : cx, 0, alongX ? cz : b.z0 + t, alongX ? 0.1 : short + 0.05, top - 0.25, alongX ? short + 0.05 : 0.1, 0x2a2d32);
+    for (let t = 0.8 + Math.random(); t < long - 0.6; t += 1.2 + Math.random() * 1.6) {
+      const x = alongX ? b.x0 + t : cx + (Math.random() - 0.5) * 0.25, z = alongX ? cz + (Math.random() - 0.5) * 0.25 : b.z0 + t;
+      any(loads).add(x, top + 0.025, z, 0.3 + Math.random() * 0.3, 0.16 + Math.random() * 0.26, 0.26 + Math.random() * 0.24, 0xffffff, (Math.random() - 0.5) * 0.6);
+    }
+  };
+  const cage = (b: Box, big: boolean) => {
+    const sx = b.x1 - b.x0, sz = b.z1 - b.z0, cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, base = big ? 0.15 : 0.14, frame = big ? 0xc9a227 : 0x9aa0a8;
+    if (big) blocks.add(cx, 0, cz, sx, base, sz, PALLET);
+    else {
+      blocks.add(cx, 0.09, cz, sx - 0.02, 0.05, sz - 0.02, 0x6b7078);
+      for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) blocks.add(cx + dx * (sx / 2 - 0.1), 0, cz + dz * (sz / 2 - 0.1), 0.08, 0.09, 0.08, 0x111214);
+    }
+    for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) blocks.add(cx + dx * (sx / 2 - 0.025), base, cz + dz * (sz / 2 - 0.025), 0.05, b.y1 - base, 0.05, frame);
+    for (const s of [-1, 1]) {
+      blocks.add(cx, b.y1 - 0.04, cz + s * (sz / 2 - 0.025), sx, 0.04, 0.05, frame);
+      blocks.add(cx + s * (sx / 2 - 0.025), b.y1 - 0.04, cz, 0.05, 0.04, sz, frame);
+    }
+    cageMesh.add(b.x0 + 0.01, base, b.z0 + 0.01, b.x1 - 0.01, b.y1, b.z1 - 0.01, false);
+    fill(b.x0 + 0.07, b.x1 - 0.07, base + 0.01, b.y1 - (big ? 0.2 : 0.12), b.z0 + 0.07, b.z1 - 0.07);
+  };
+  const gaylord = (b: Box) => {
+    const sx = b.x1 - b.x0, sz = b.z1 - b.z0, cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, layers = Math.max(1, Math.round((b.y1 - b.y0) / 1.1)), lh = (b.y1 - b.y0) / layers;
+    for (let l = 0; l < layers; l++) {
+      const y = b.y0 + l * lh;
+      blocks.add(cx, y, cz, sx, 0.13, sz, PALLET);
+      any(loads).add(cx, y + 0.13, cz, sx - 0.04, lh - 0.13, sz - 0.04, 0xe6d3b5);
+      blocks.add(cx, y + 0.13 + (lh - 0.13) * 0.45, cz, sx - 0.02, 0.05, sz - 0.02, 0x2a2a2a); // a strap round it
+    }
+    blocks.add(cx, b.y1, cz, sx - 0.34, 0.006, sz - 0.34, 0x4a3a28); // the open top: the dark inside
+    for (let i = 0; i < 2; i++) any(loads).add(cx + (Math.random() - 0.5) * 0.5, b.y1, cz + (Math.random() - 0.5) * 0.5, 0.36, 0.2, 0.3, 0xffffff, Math.random() * 3);
+  };
+  const sackPile = (b: Box) => {
+    const sx = b.x1 - b.x0, sz = b.z1 - b.z0, h = b.y1 - b.y0, alongX = sx >= sz, long = Math.max(sx, sz), short = Math.min(sx, sz);
+    const nl = Math.max(1, Math.round(h / 0.3)), lh = h / nl, na = Math.max(1, Math.round(long / 0.72)), nc = Math.max(1, Math.round(short / 0.5));
+    for (let j = 0; j < nl; j++) for (let i = 0; i < na; i++) for (let m = 0; m < nc; m++) {
+      if (j === nl - 1 && Math.random() < 0.3) continue;
+      const a = (i + 0.5 + (j % 2) * 0.25) * long / na - (j % 2) * 0.12, c = (m + 0.5) * short / nc;
+      const L = long / na * (1.05 + Math.random() * 0.2), W = short / nc * (1.0 + Math.random() * 0.2), y = b.y0 + j * lh - 0.04;
+      sacks.add(alongX ? b.x0 + a : b.x0 + c, y, alongX ? b.z0 + c : b.z0 + a, alongX ? L : W, lh * 1.35, alongX ? W : L, any(SACK), (Math.random() - 0.5) * 0.35);
+    }
+  };
+  const chute = (b: Box) => {
+    const sx = b.x1 - b.x0, sz = b.z1 - b.z0, cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, alongX = sx >= sz, long = Math.max(sx, sz), short = Math.min(sx, sz);
+    box(b, STEEL);
+    for (const s of [-1, 1]) blocks.add(alongX ? cx : cx + s * (short / 2 + 0.005), b.y1 - 0.02, alongX ? cz + s * (short / 2 + 0.005) : cz, alongX ? long : 0.05, 0.2, alongX ? 0.05 : long, 0xb5bdc7);
+    // a yellow stop at the end away from the wall, and parcels that came down
+    const wallHigh = alongX ? solid(b.x1 + 0.5, cz) : solid(cx, b.z1 + 0.5), e = wallHigh ? -1 : 1;
+    blocks.add(alongX ? cx + e * (long / 2 - 0.03) : cx, b.y1 - 0.02, alongX ? cz : cz + e * (long / 2 - 0.03), alongX ? 0.06 : short, 0.32, alongX ? short : 0.06, YELLOW);
+    for (let i = 0; i < 3; i++) {
+      const t = e * (long / 2 - 0.35 - i * 0.55);
+      any(loads).add(alongX ? cx + t : cx + (Math.random() - 0.5) * 0.4, b.y1, alongX ? cz + (Math.random() - 0.5) * 0.4 : cz + t, 0.32 + Math.random() * 0.2, 0.18 + Math.random() * 0.2, 0.28 + Math.random() * 0.2, 0xffffff, Math.random() * 3);
+    }
+    hazard.add(b.x0 - 0.01, 0, b.z0 - 0.01, b.x1 + 0.01, 0.12, b.z1 + 0.01, false);
+  };
+  const van = (b: Box) => {
+    // along z, the cab toward +z: a body on a dark underside, windows, lamps, wheels in arches, the logo
+    const sx = b.x1 - b.x0, sz = b.z1 - b.z0, cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, h = b.y1, SILL = 0.38, R = 0.34;
+    blocks.add(cx, SILL, cz, sx, h - SILL, sz, 0xe9ecef);
+    blocks.add(cx, 0, cz, sx - 0.5, SILL, sz - 0.3, 0x121316);
+    blocks.add(cx, 0.22, b.z1 - 0.06, sx + 0.04, 0.3, 0.16, 0x2a2c31); blocks.add(cx, 0.22, b.z0 + 0.06, sx + 0.04, 0.26, 0.14, 0x2a2c31); // bumpers
+    glass.add(cx, 1.4, b.z1 + 0.012, sx - 0.3, 0.8, 0.03, 0x0d1626);
+    blocks.add(cx, 0.62, b.z1 + 0.012, 1.0, 0.36, 0.03, 0x15161a); // grille
+    for (const s of [-1, 1]) {
+      const fx = s < 0 ? b.x0 : b.x1;
+      glass.add(fx + s * 0.012, 1.55, b.z1 - 0.65, 0.03, 0.62, 0.9, 0x0d1626);
+      glow.add(cx + s * (sx / 2 - 0.3), 0.74, b.z1 + 0.02, 0.36, 0.14, 0.03, 0xfff0c8);
+      glow.add(cx + s * (sx / 2 - 0.12), 0.9, b.z0 - 0.02, 0.14, 0.4, 0.03, 0xff3b30);
+      for (const wz of [b.z0 + 0.9, b.z1 - 1.0]) {
+        blocks.add(fx + s * 0.006, SILL - 0.02, wz, 0.02, 0.48, 0.95, 0x0d0d0e);
+        wheels.add(fx - s * 0.12, R, wz, 0.24, R * 2, R * 2, 0x101113); wheels.add(fx - s * 0.11, R, wz, 0.24, R, R, 0x9aa0a8);
+      }
+      decals.quad(k.logoDark, fx + s * 0.012, 1.5, cz - 0.5, 3.0, 0.71, s * Math.PI / 2);
+    }
+    blocks.add(cx, 0.45, b.z0 - 0.006, 0.03, h - 0.6, 0.012, 0x6b7078); // the seam between the rear doors
+  };
+
+  const dress = (b: Box): boolean => {
+    const c = b.color, sx = b.x1 - b.x0, sz = b.z1 - b.z0, cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2;
+    if (c === P.belt) belt(b, false);
+    else if (c === P.overhead) belt(b, true);
+    else if (c === P.rollCage) cage(b, false);
+    else if (c === P.cage) cage(b, true);
+    else if (c === P.gaylord) gaylord(b);
+    else if (c === P.sacks) sackPile(b);
+    else if (c === P.chute) chute(b);
+    else if (c === P.van) van(b);
+    else if (c === P.deck) {
+      // steel tread plate, a striped front edge, rails wherever the top is open to the floor below
+      tread.add(b.x0, b.y0, b.z0, b.x1, b.y1, b.z1);
+      hazard.add(b.x0, b.y1 - 0.22, b.z1, b.x1, b.y1 + 0.004, b.z1 + 0.012, false);
+      edgeRails(b);
+    } else if (c === P.steps) {
+      box(b, c); blocks.add(cx, b.y1 - 0.05, b.z1 - 0.03, sx, 0.05, 0.06, 0x2a2c31); // a dark nosing on each tread
+    } else if (c === P.parapet) {
+      box(b, c); blocks.add(cx, b.y1, cz, sx + 0.04, 0.06, sz + 0.06, YELLOW);
+      decals.quad(sterownia, cx - sx * 0.3, (b.y0 + b.y1) / 2, b.z1 + 0.012, 2.4, 0.5, 0);
+    } else if (c === P.roof) {
+      // the control room's roof: a lamp under it, a sign hung from its front edge, screens and a desk on the wall behind
+      box(b, c); glow.add(cx, b.y0 - 0.03, cz, sx - 1.2, 0.03, 0.22, 0xf6f7ff);
+      blocks.add(cx, b.y0 - 0.62, b.z1 - 0.05, 3.2, 0.6, 0.04, DARK); decals.quad(sterownia, cx, b.y0 - 0.32, b.z1 - 0.03 + 0.012, 3.0, 0.55, 0);
+      for (let x = b.x0 + 1.5; x < b.x1 - 1; x += 2.2) decals.quad(screen, x, b.y0 - 1.25, b.z0 + 0.012, 1.4, 0.86, 0);
+    } else if (c === P.post) box(b, 0x2b2f36);
+    else if (c === P.dock) {
+      box(b, 0x8a8d92);
+      if (Math.max(sx, sz) > 4) {
+        // the dock's face: a striped edge, a steel nosing, black bumpers under the dock doors
+        hazard.add(b.x0, b.y1 - 0.24, b.z1, b.x1, b.y1, b.z1 + 0.012, false);
+        blocks.add(cx, b.y1 - 0.04, b.z1, sx, 0.05, 0.05, 0x6b7078);
+        for (const o of BOXES) if (o.color === 0xc9ccd2 && o.x0 >= b.x0 && o.x1 <= b.x1 && near2(o.z0, b.z0)) for (const dx of [-1.2, 1.2]) blocks.add((o.x0 + o.x1) / 2 + dx, 0.2, b.z1 + 0.07, 0.3, 0.7, 0.14, 0x151515);
+      } else hazard.add(b.x0, b.y1 - 0.06, b.z0, b.x1, b.y1 + 0.003, b.z1, false);
+    } else return false;
+    return true;
+  };
+  const near2 = (a: number, b: number) => Math.abs(a - b) < 0.3;
+
+  return {
+    dress,
+    build(group: THREE.Group) {
+      // the stairs' sloped rails: a flight is the steps under one x range, climbing to the deck at its top
+      const steps = BOXES.filter((b) => b.color === P.steps);
+      for (const deck of BOXES.filter((b) => b.color === P.deck)) {
+        const tops = steps.filter((st) => Math.abs(st.z0 - deck.z1) < 0.01 && st.x0 >= deck.x0 - 0.01 && st.x1 <= deck.x1 + 0.01);
+        for (const top of tops) {
+          const flight = steps.filter((st) => Math.abs(st.x0 - top.x0) < 0.01 && Math.abs(st.x1 - top.x1) < 0.01 && st.z0 >= deck.z1 - 0.01);
+          const zEnd = Math.max(...flight.map((st) => st.z1)), yEnd = Math.min(...flight.map((st) => st.y1));
+          const run = zEnd - deck.z1, drop = deck.y1 - yEnd, len = Math.hypot(run, drop), tilt = Math.atan2(run, -drop);
+          for (const x of [top.x0 + 0.04, top.x1 - 0.04]) {
+            for (const dy of [0.55, 1.03]) blocks.add(x, deck.y1 + dy, deck.z1, 0.05, len, 0.05, YELLOW, 0, tilt);
+            for (let i = 1; i <= 3; i++) blocks.add(x, deck.y1 - drop * i / 3, deck.z1 + run * i / 3, 0.05, 1.05, 0.05, YELLOW);
+          }
+        }
+      }
+      // the chutes' slides: a steel plate from the trough up to a mouth in the wall, with raised sides
+      for (const d of layout().deco ?? []) {
+        if (d.kind !== "chute") continue;
+        const mx = (d.x0 + d.x1) / 2, mz = (d.z0 + d.z1) / 2, w = d.dir < 2 ? d.z1 - d.z0 : d.x1 - d.x0;
+        const [lx, lz, hx, hz] = d.dir === 0 ? [d.x1, mz, d.x0, mz] : d.dir === 1 ? [d.x0, mz, d.x1, mz] : d.dir === 2 ? [mx, d.z0, mx, d.z1] : [mx, d.z1, mx, d.z0];
+        const hor = Math.hypot(hx - lx, hz - lz), rise = d.y1 - d.y0, len = Math.hypot(hor, rise), ry = Math.atan2(hx - lx, hz - lz), tilt = Math.atan2(hor, rise);
+        // the plate's own axes: across it (horizontal) and up out of it
+        const ax = Math.cos(ry), az = -Math.sin(ry), ux = -Math.cos(tilt) * Math.sin(ry), uy = Math.sin(tilt), uz = -Math.cos(tilt) * Math.cos(ry);
+        blocks.add(lx, d.y0, lz, w, len, 0.05, STEEL, ry, tilt);
+        for (const s of [-1, 1]) blocks.add(lx + ax * s * w / 2 + ux * 0.1, d.y0 + uy * 0.1, lz + az * s * w / 2 + uz * 0.1, 0.05, len, 0.22, 0xb5bdc7, ry, tilt);
+        const fx = (lx - hx) / hor, fz = (lz - hz) / hor;
+        decals.quad(mouth, hx + fx * 0.012, d.y1 + 0.3, hz + fz * 0.012, w + 0.5, 0.95, Math.atan2(fx, fz));
+      }
+      cageMesh.build(group, new THREE.MeshStandardMaterial({ map: meshTexture(), transparent: true, alphaTest: 0.3, side: THREE.DoubleSide, roughness: 0.5, metalness: 0.6 }));
+      tread.build(group, new THREE.MeshStandardMaterial({ map: treadTexture(), roughness: 0.5, metalness: 0.6 }), true);
+      sacks.build(group);
+    },
+  };
+}
+
+/**
+ * The sorting centre's way signs: a plate hung in every doorway just under the lintel, each face naming (in its
+ * colour) the zone that lies beyond it, so whoever stands in a room reads where each door leads.
+ */
+function sortSigns(decals: Decals, blocks: Instancer, doors: Door[], lintel: number) {
+  const cache = new Map<string, Region>();
+  const plate = (name: string, color: string) => cache.get(name) ?? cache.set(name, decals.region(252, 60, (g, w, h) => {
+    g.fillStyle = "#14161a"; g.fillRect(0, 0, w, h); g.fillStyle = color; g.fillRect(0, 0, 14, h); g.fillRect(0, h - 5, w, 5);
+    g.beginPath(); g.moveTo(w - 30, 14); g.lineTo(w - 16, 34); g.lineTo(w - 44, 34); g.closePath(); g.fill(); // an arrow: ahead, through this door
+    g.fillStyle = "#f5f5f7"; g.font = "700 32px Inter, -apple-system, sans-serif"; g.textAlign = "left"; g.textBaseline = "middle"; g.fillText(name, 26, h / 2, w - 84);
+  })).get(name)!;
+  const zoneAt = (x: number, z: number) => ZONES.find((zn) => x > zn.x0 && x < zn.x1 && z > zn.z0 && z < zn.z1);
+  for (const d of doors) {
+    const cx = (d.x0 + d.x1) / 2, cz = (d.z0 + d.z1) / 2, wide = d.alongZ ? d.x1 - d.x0 : d.z1 - d.z0, deep = d.alongZ ? d.z1 - d.z0 : d.x1 - d.x0;
+    const w = Math.min(2.6, wide - 0.5), y = lintel - 0.45;
+    blocks.add(cx, y - 0.33, cz, d.alongZ ? w + 0.06 : 0.04, 0.66, d.alongZ ? 0.04 : w + 0.06, 0x14161a);
+    for (const s of [-1, 1]) {
+      // the face toward side s names what lies the other way
+      let zn; for (let t = deep / 2 + 1; t < 30 && !zn; t += 1) zn = zoneAt(cx - (d.alongZ ? 0 : s * t), cz - (d.alongZ ? s * t : 0));
+      if (!zn) continue;
+      const name = zn.name.includes(" · ") ? zn.name.split(" · ")[0] : zn.name;
+      decals.quad(plate(name, zn.color), cx + (d.alongZ ? 0 : s * 0.032), y, cz + (d.alongZ ? s * 0.032 : 0), w, w * 60 / 252, d.alongZ ? (s > 0 ? 0 : Math.PI) : s * Math.PI / 2);
+    }
+  }
 }
 
 /** The forklift's parts, merged into one geometry per material and built once: every forklift shares them. */

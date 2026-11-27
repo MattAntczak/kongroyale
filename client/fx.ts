@@ -226,7 +226,7 @@ export class Fx {
     this.labelMesh?.setMatrixAt(i, this.m);
   }
 
-  /** Launch one visual box from (x, y, z) along a unit direction. */
+  /** Launch one visual box from (x, y, z) along a unit direction; returns its slot (for reaim). */
   launch(x: number, y: number, z: number, dx: number, dy: number, dz: number, w: WeaponId, team: number, owner: number) {
     const i = this.bnext; this.bnext = (i + 1) % MAX_BOXES;
     if (this.bage[i] >= 0) this.hide(i); // recycled while still flying: clear it in both meshes, its kind may change
@@ -241,6 +241,25 @@ export class Fx {
     this.boxMesh.setColorAt(i, w === "grenade" ? this.c.setRGB(1, 0.62, 0.5) : this.c.setRGB(v, v, v * 0.97));
     this.boxMesh.instanceColor!.needsUpdate = true;
     this.boxesLive = true;
+    return i;
+  }
+
+  /**
+   * Put box `i` (launched by `owner`) on another line from (ox, oy, oz) along (dx, dy, dz), where it would be by now:
+   * our own predicted throw, moved onto the host's line when its "shot" event arrives. A box the host's line would
+   * already have stopped against a wall or a player is cleared.
+   */
+  reaim(i: number, owner: number, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number) {
+    if (i < 0 || this.bage[i] < 0 || this.bowner[i] !== owner) return;
+    const len = Math.hypot(dx, dy, dz);
+    if (!(len > 1e-6)) return;
+    dx /= len; dy /= len; dz /= len;
+    // the launch speed: the velocity now with the gravity of its flight so far taken back out
+    const t = this.bage[i], g = this.bnade[i] ? GRENADE_GRAVITY : BOX_GRAVITY;
+    const sp = Math.hypot(this.bv[i * 3], this.bv[i * 3 + 1] + g * t, this.bv[i * 3 + 2]), run = sp * t;
+    if (run > 0.05 && this.hitTest(ox, oy, oz, dx, dy, dz, run, this.bteam[i], owner).t < run - 0.05) { this.bage[i] = -1; this.hide(i); return; }
+    this.bx[i * 3] = ox + dx * run; this.bx[i * 3 + 1] = oy + dy * run - 0.5 * g * t * t; this.bx[i * 3 + 2] = oz + dz * run;
+    this.bv[i * 3] = dx * sp; this.bv[i * 3 + 1] = dy * sp - g * t; this.bv[i * 3 + 2] = dz * sp;
   }
 
   /** A burst of cardboard scraps (and a little packing paper). A big count is a grenade: larger scraps, thrown further. */
