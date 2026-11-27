@@ -22,6 +22,10 @@ export const SEATS = [
   { x: -1.25, y: 1.45, z: 0 }, // thrower, on the raised rear platform: sees over the driver's hard hat
 ] as const;
 
+/** How fast a thrower on the rear platform counts as moving for the spread of a throw: half the forklift's speed
+ *  (the platform carries them, their legs do not run; never "in the air"). Host and client use the same. */
+export const rideSpeed = (v: VehicleState) => Math.abs(v.speed) * 0.5;
+
 export interface VehicleState { x: number; z: number; yaw: number; speed: number }
 
 const CIRCLE_R = 0.72;

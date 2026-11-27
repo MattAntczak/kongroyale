@@ -36,6 +36,9 @@ export const LAND_S = 0.3;
 export const LAND_JUMP = 0.85;
 /** Nothing on foot goes faster horizontally than this, however it strafes in the air (the host checks against it). */
 export const MAX_FOOT_SPEED = RUN_SPEED * 1.25;
+/** The fastest a body on foot loses horizontal speed without running into something (m/s²): friction at the top
+ *  speed plus the full acceleration of a counter-strafe. The host bounds a claimed stop with it. */
+export const STOP_DECEL = FRICTION * MAX_FOOT_SPEED + ACCEL * RUN_SPEED;
 /** Running (louder than this) makes footsteps; walking and crouching do not. */
 export const STEP_SPEED = 3;
 export const STEP_H = 0.45;

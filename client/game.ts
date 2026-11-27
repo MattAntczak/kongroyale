@@ -7,7 +7,7 @@ import { BOX_HIT_PAD, CROUCH_H, EYE_H, PLAYER_H, STEP_SPEED, bodyH, eyeH, rayPla
 import { MONEY_START, PRICES, SHOP, WEAPONS, WEAPON_ORDER, aimCone, kickAim, maxSpeed, newAim, resetAim, settleAim, type WeaponId } from "../shared/weapons";
 import { spreadDirs } from "../shared/sim";
 import type { Ev, HostMsg, PlayerSnap, VehicleSnap } from "../shared/proto";
-import { VEH_USE_R, seatPos, stepVehicle, vehicleBox as vehicleBoxInto, type VehicleState } from "../shared/vehicle";
+import { VEH_USE_R, rideSpeed, seatPos, stepVehicle, vehicleBox as vehicleBoxInto, type VehicleState } from "../shared/vehicle";
 import { setDynamicBoxes } from "../shared/physics";
 import type { Box } from "../shared/map";
 import { buildWorld, forkliftModel, type WorldHandle } from "./world";
@@ -445,8 +445,10 @@ export class Game {
     // the host decides the throw from our view and its own copy of this model; we predict it with the same numbers
     // (our own random draw: the host's "shot" event moves the boxes onto its lines a moment later)
     settleAim(this.aim, w, now);
-    const spd = Math.hypot(this.body.vx, this.body.vz), air = !this.body.onGround, sight = this.zoomK > 0.8 && w.zoom > 1;
+    const spd = this.moveSpeed(), air = !this.body.onGround, sight = this.zoomK > 0.8 && w.zoom > 1;
     const cone = aimCone(w, this.aim, spd, air, !!this.body.crouch, sight);
+    // the host judges the speed of a throw by the positions it has: give it the one of this moment
+    this.sendState();
     const dirs = spreadDirs(this.yaw + this.aim.py, this.pitch + this.aim.pp, cone, w.pellets, Math.random);
     kickAim(this.aim, this.w, now);
     const view = this.serverNow() - INTERP_S, n = ++this.shotN;
@@ -700,6 +702,17 @@ export class Game {
 
   // ---------------------------------------------------------------- frame
 
+  /** Our state as the host checks it (sent at STATE_HZ and right before every throw). */
+  private sendState() {
+    this.link.send({ t: "state", x: this.body.x, y: this.body.y, z: this.body.z, yaw: this.yaw, pitch: this.pitch, moving: Math.hypot(this.body.vx, this.body.vz) > 1, spawn: this.spawn, crouch: !!this.body.crouch });
+  }
+
+  /** How fast we move for the spread of a throw: on foot our own speed, on the rear platform the forklift's share. */
+  private moveSpeed(): number {
+    const ride = this.veh >= 0 && this.alive ? this.vehPoses.get(this.veh) : undefined;
+    return ride ? rideSpeed(ride) : Math.hypot(this.body.vx, this.body.vz);
+  }
+
   private frame(t: number) {
     this.raf = requestAnimationFrame((tt) => this.frame(tt));
     const dt = Math.min(0.05, (t - this.last) / 1000);
@@ -749,7 +762,7 @@ export class Game {
     this.sendAcc += dt;
     if (this.sendAcc >= 1 / STATE_HZ && this.myId) {
       this.sendAcc = 0;
-      if (this.alive) this.link.send({ t: "state", x: this.body.x, y: this.body.y, z: this.body.z, yaw: this.yaw, pitch: this.pitch, moving: Math.hypot(this.body.vx, this.body.vz) > 1, spawn: this.spawn, crouch: !!this.body.crouch });
+      if (this.alive) this.sendState();
       if (driving) this.link.send({ t: "drive", x: this.drive.x, z: this.drive.z, yaw: this.drive.yaw, speed: this.drive.speed, rev: this.vrev });
     }
     if (this.reloadUntil && nowS >= this.reloadUntil) {
@@ -1001,7 +1014,7 @@ export class Game {
     if (prompt) this.set("usePromptText", prompt);
     // the crosshair shows the real cone of the next throw: it opens with a spray, running or a jump and closes as the
     // aim recovers (the gap is the cone's radius on the screen, so a box lands inside it)
-    const cone = aimCone(w, this.aim, Math.hypot(this.body.vx, this.body.vz), !this.body.onGround, !!this.body.crouch, this.zoomK > 0.8 && w.zoom > 1);
+    const cone = aimCone(w, this.aim, this.moveSpeed(), !this.body.onGround, !!this.body.crouch, this.zoomK > 0.8 && w.zoom > 1);
     const want = 3 + Math.tan(cone) / Math.tan(this.camera.fov * Math.PI / 360) * window.innerHeight / 2;
     this.crossGap += (want - this.crossGap) * Math.min(1, dt * 30);
     const gap = this.crossGap.toFixed(1);
