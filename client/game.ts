@@ -457,7 +457,7 @@ export class Game {
     $("crawlText").innerHTML = `<p class="ep">${st.episode}</p><h1>${st.title}</h1>` + st.text.map((t) => `<p>${t}</p>`).join("");
     const team = m.me.team & 1;
     $("briefRole").innerHTML = `<span class="badge" style="background:${TEAM_CSS[team]};color:#fff">${TEAM_NAMES[team]}</span><b>${st.task[team]}</b>`;
-    $("briefLayout").textContent = LAYOUTS[m.layout].kind === "depot" ? "Mapa: Zajezdnia" : `Hala magazynowa, konfiguracja ${LAYOUTS[m.layout].name}`;
+    $("briefLayout").textContent = LAYOUTS[m.layout].kind === "depot" ? `Mapa: ${LAYOUTS[m.layout].name}` : `Hala magazynowa, konfiguracja ${LAYOUTS[m.layout].name}`;
     $("brief").hidden = m.phase !== "brief";
     // restart the crawl
     const el = $("crawlText"); el.style.animation = "none"; void el.offsetHeight; el.style.animation = "";
