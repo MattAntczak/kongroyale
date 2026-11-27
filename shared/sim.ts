@@ -9,7 +9,7 @@
 // the walls and a speed limit and sends a correction when one fails. Shots are decided here: each one launches real
 // cardboard boxes that fly tick by tick, and a box tests players where the shooter saw them (up to 300 ms back).
 
-import { BOXES, PICKUPS, SPAWNS, HALL, LAYOUTS, HALL_LAYOUTS, DEPOT_LAYOUT, VEHICLE_SPAWNS, sites, useLayout, type Box as HallBox, type PickupKind, type PickupSpot } from "./map";
+import { BOXES, PICKUPS, SPAWNS, HALL, LAYOUTS, HALL_LAYOUTS, DEPOT_LAYOUT, SORT_LAYOUT, VEHICLE_SPAWNS, sites, useLayout, type Box as HallBox, type PickupKind, type PickupSpot } from "./map";
 import { SEATS, VEH_MAX_SPEED, VEH_USE_R, seatPos, stepVehicle, vehicleBlocked, vehicleBox, type VehicleState } from "./vehicle";
 import { BOX_HIT_PAD, EYE_H, PLAYER_H, SPRINT_SPEED, blocked, lineOfSight, rayPlayer, rayWorld, setDynamicBoxes, stepBody, viewDir, type Body } from "./physics";
 import { BOX_GRAVITY, BOX_LIFE_S, GRENADE_FUSE_S, GRENADE_GRAVITY, GRENADE_R, WEAPONS, PRICES, SHOP, MONEY_START, MONEY_MAX, MONEY_WIN, MONEY_LOSS, MONEY_KILL, MONEY_POINT, BUY_S, falloff, lobPitch, type WeaponId } from "./weapons";
@@ -269,7 +269,7 @@ export class Sim {
     this.config = {
       bots: [n(c.bots[0]), n(c.bots[1])],
       mission: c.mission === "server" || c.mission === "tags" ? c.mission : "random",
-      map: c.map === "hall" ? "hall" : "depot",
+      map: c.map === "hall" || c.map === "sort" ? c.map : "depot",
       difficulty: c.difficulty === "easy" || c.difficulty === "hard" ? c.difficulty : "normal",
     };
   }
@@ -278,7 +278,7 @@ export class Sim {
   begin(forceLayout = -1) {
     if (this.phase !== "lobby") return;
     // a different configuration from last time (tests may name one)
-    this.layout = forceLayout >= 0 ? forceLayout : this.config.map === "depot" ? DEPOT_LAYOUT
+    this.layout = forceLayout >= 0 ? forceLayout : this.config.map === "depot" ? DEPOT_LAYOUT : this.config.map === "sort" ? SORT_LAYOUT
       : ((this.layout % HALL_LAYOUTS) + 1 + Math.floor(this.rand() * (HALL_LAYOUTS - 1))) % HALL_LAYOUTS;
     useLayout(this.layout);
     this.mission = this.config.mission === "random" ? (this.rand() < 0.5 ? "server" : "tags") : this.config.mission;

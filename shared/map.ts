@@ -262,6 +262,14 @@ function build(cfg: Cfg): Layout {
 // south-west, the workers in the south-east, the docks lie between them.
 //
 // The building is drawn as open rectangles (rooms and doorways) on a 1 m grid; everything else is solid wall.
+// ---------------------------------------------------------------- the sorting centre
+//
+// PLACEHOLDER: a compact arena in the manner of a CS map, still to be designed. Until then it is the depot under
+// another name, so the lobby, the host and the tests can already pick it.
+function buildSort(): Layout {
+  return { ...buildDepot(), name: "Sortownia" };
+}
+
 function buildDepot(): Layout {
   const D: Hall = { x0: -92, x1: 92, z0: -60, z1: 60, h: 8 };
   type R = [number, number, number, number]; // x0, x1, z0, z1
@@ -439,10 +447,12 @@ export const LAYOUTS: readonly Layout[] = [
     servers: [[-82, 34.25], [-82, -92.75]], stations: [[-94, 60.25], [-94, -40.75]],
   }),
   buildDepot(),
+  buildSort(),
 ];
 /** How many of the layouts are configurations of the big hall (the depot comes after them). */
 export const HALL_LAYOUTS = 3;
 export const DEPOT_LAYOUT = 3;
+export const SORT_LAYOUT = 4;
 
 /** Index of the current configuration. */
 export let LAYOUT = 0;

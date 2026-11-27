@@ -74,7 +74,7 @@ console.log("bot matches, 6 v 6:");
 const role = [0, 0];
 const PLAN: [Mission, number][] = process.argv.includes("--balance")
   ? [["server", 3], ["tags", 3], ["server", 3], ["tags", 3], ["server", 0], ["tags", 0], ["server", 1], ["tags", 1], ["server", 2], ["tags", 2], ["server", 0], ["tags", 1], ["server", 2]]
-  : [["server", 0], ["tags", 1], ["server", 2], ["server", 3], ["tags", 3]];
+  : [["server", 0], ["tags", 1], ["server", 2], ["server", 3], ["tags", 3], ["server", 4], ["tags", 4]];
 PLAN.forEach(([m, l], i) => { const r = match(m, l, 40 + i * 7); role[0] += r[0]; role[1] += r[1]; });
 console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
 
