@@ -3,7 +3,7 @@
 // health, ammo and kills; this file only predicts what the host will most likely say and accepts what it does say.
 
 import * as THREE from "three";
-import { BOX_HIT_PAD, CROUCH_H, EYE_H, PLAYER_H, STEP_SPEED, bodyH, eyeH, rayPlayer, rayWorld, stepBody, viewDir, type Body } from "../shared/physics";
+import { BOX_HIT_PAD, CROUCH_H, EYE_H, PLAYER_H, STEP_SPEED, blocked, bodyH, eyeH, rayPlayer, rayWorld, stepBody, viewDir, type Body } from "../shared/physics";
 import { MONEY_START, PRICES, SHOP, WEAPONS, WEAPON_ORDER, aimCone, kickAim, maxSpeed, newAim, resetAim, settleAim, type WeaponId } from "../shared/weapons";
 import { spreadDirs } from "../shared/sim";
 import type { Ev, HostMsg, PlayerSnap, VehicleSnap } from "../shared/proto";
@@ -520,6 +520,13 @@ export class Game {
       this.spawn = me.spawn;
       this.body.x = me.x; this.body.y = me.y; this.body.z = me.z; this.body.vx = this.body.vy = this.body.vz = 0;
       if (respawned) { this.yaw = me.yaw; this.pitch = 0; this.body.crouch = false; this.body.tucked = false; resetAim(this.aim); }
+      else {
+        // a correction: the host's stance too (and crouched wherever standing does not fit, or the head would be in a
+        // roof and every later state refused), and its fall speed, so the body falls on as the host's clock says
+        this.body.crouch = !!me.crouch || blocked(me.x, me.y + 0.01, me.z, false, PLAYER_H - 0.02);
+        this.body.tucked = false; this.body.onGround = false;
+        this.body.vy = Number.isFinite(me.vy) ? Math.min(0, me.vy) : 0;
+      }
     }
     this.alive = me.alive; this.myGroup = me.group & 1;
     // a launcher we did not have a snap ago: just bought, the host has put it in our hands, full
@@ -748,6 +755,9 @@ export class Game {
         const wasGround = this.body.onGround;
         stepBody(this.body, inp, 1 / 60);
         if (inp.jump && wasGround && !this.body.onGround && this.body.vy > 0) { this.jumpLatch = true; inp.jump = false; }
+        // a landing goes to the host at once: a hop right after it (Space pressed again in the air) leaves the
+        // ground the next step, and a host that never saw the feet down would keep counting the last jump's fall
+        if (!wasGround && this.body.onGround && this.myId && this.alive) this.sendState();
         // a crouch in the air lifts the feet: keep the eye where it was and let it ease from there
         if (this.body.shift) { this.eyeOff -= this.body.shift; this.body.shift = 0; }
       }

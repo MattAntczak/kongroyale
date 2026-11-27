@@ -6,15 +6,18 @@
 // speed check, and first-throw accuracy against a spray. Then the host's own view of a person: its speed for a throw
 // (states chopped up or held back do not hide a run), the forklift's thrower, the speed limit of the stance and the
 // launcher, head room under Sortownia's roof, gravity (no climbing or hovering on states), and an honest minute of
-// play on Sortownia and on Zajezdnia through a lossy network that the host must never correct.
+// play on Sortownia and on Zajezdnia through a lossy network that the host must never correct. Then corrections that
+// take the host's crouch and fall speed, the lag credit after a ride, lag bursts while running, the head room of
+// Sortownia, the host's own gravity (no hovering by corrections or silence), the air's speed limit only after a real
+// lift-off, the forklift's speed as the host measures it, and throws judged again after a frozen position.
 // Run with `npm run smoke`.
 
-import { BOXES, LADDERS, LAYOUTS, PERCH_H, VEHICLE_SPAWNS, useLayout, type Box } from "./shared/map";
+import { BOXES, HALL, LADDERS, LAYOUTS, PERCH_H, VEHICLE_SPAWNS, useLayout, type Box } from "./shared/map";
 import { BOX_HIT_PAD, CROUCH_H, PLAYER_H, PLAYER_R, RUN_SPEED, blocked, rayPlayer, setDynamicBoxes, stepBody, viewDir, type Body, type MoveInput } from "./shared/physics";
 import { rideSpeed, seatPos, stepVehicle, type VehicleState } from "./shared/vehicle";
 import { findPath } from "./shared/nav";
 import { Sim, TICK_HZ, BRIEF_S, FREEZE_S, ROUNDS_WIN } from "./shared/sim";
-import { WEAPONS, lobPitch, maxSpeed, type WeaponId } from "./shared/weapons";
+import { BOX_GRAVITY, WEAPONS, lobPitch, maxSpeed, type WeaponId } from "./shared/weapons";
 import type { ClientMsg, Mission } from "./shared/proto";
 
 let bad = 0;
@@ -361,7 +364,7 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
 // honest minute of play (a client model with latency, jitter and lag bursts) that must never be corrected
 {
   const DT = 1 / TICK_HZ;
-  type HP = { body: Body; money: number; aim: { pp: number; py: number }; spawn: number; veh: number; seat: number; w: WeaponId; hp: number; protectUntil: number };
+  type HP = { body: Body; money: number; aim: { pp: number; py: number }; spawn: number; veh: number; seat: number; w: WeaponId; hp: number; protectUntil: number; lagCredit: number; rejudged: number };
   /** A shift with people only (no bots), stepped into play. */
   const room = (layout: number, teams: number[], seed = 11) => {
     const sim = new Sim({ seed });
@@ -377,7 +380,7 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
   /** Free floor for a circle of radius `r`. */
   const openDisc = (r: number): [number, number] => {
     for (let z = -100; z <= 100; z += 2) for (let x = -200; x <= 200; x += 2) {
-      let ok = true;
+      let ok = x - r - 1 > HALL.x0 && x + r + 1 < HALL.x1 && z - r - 1 > HALL.z0 && z + r + 1 < HALL.z1;
       for (let a = 0; a < 24 && ok; a++) for (const rr of [0, r / 2, r, r + 0.8]) if (blocked(x + Math.cos(a / 24 * 6.283) * rr, 0.01, z + Math.sin(a / 24 * 6.283) * rr, false)) { ok = false; break; }
       if (ok) return [x, z];
     }
@@ -402,7 +405,9 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
     drive: VehicleState = { x: 0, z: 0, yaw: 0, speed: 0 };
     vehicles: VehicleState[] = [];
     private up: { at: number; m: ClientMsg }[] = [];
-    private down: { at: number; s: { me: { spawn: number; x: number; y: number; z: number; veh: number; seat: number; vrev: number }; vehicles: VehicleState[] } }[] = [];
+    private down: { at: number; s: { me: { spawn: number; x: number; y: number; z: number; veh: number; seat: number; vrev: number; crouch: boolean; vy: number }; vehicles: VehicleState[] } }[] = [];
+    /** Take only the position on a correction (the old client), not the host's stance and fall speed. */
+    oldFix = false;
     private lastUp = 0; private lastDown = 0; private frameN = 0; private hostSpawn: number;
     stalls: [number, number][] = [];
     constructor(readonly sim: Sim, readonly id: number, readonly net = { lat: 0.04, jit: 0.025, rand: Math.random }) {
@@ -432,6 +437,11 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
         if (s.me.spawn !== this.spawn) {
           this.spawn = s.me.spawn;
           Object.assign(this.body, { x: s.me.x, y: s.me.y, z: s.me.z, vx: 0, vy: 0, vz: 0 });
+          if (!this.oldFix) {
+            // as game.ts: the host's stance (crouched where standing does not fit) and its fall speed
+            this.body.crouch = s.me.crouch || blocked(s.me.x, s.me.y + 0.01, s.me.z, false, PLAYER_H - 0.02);
+            this.body.tucked = false; this.body.onGround = false; this.body.vy = Math.min(0, s.me.vy ?? 0);
+          }
         }
         if (s.me.veh !== this.veh || s.me.seat !== this.seat || (s.me.veh >= 0 && s.me.vrev !== this.vrev)) {
           const v = s.vehicles.find((q) => (q as unknown as { id: number }).id === s.me.veh);
@@ -444,7 +454,11 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
         const pose = this.seat === 0 ? this.drive : this.vehicles.find((q) => (q as unknown as { id: number }).id === this.veh);
         if (pose) { const o = [0, 0, 0]; seatPos(pose, this.seat, o); this.body.x = o[0]; this.body.y = o[1]; this.body.z = o[2]; }
         this.body.vx = this.body.vz = 0; this.body.onGround = true; this.body.crouch = false; this.body.tucked = false;
-      } else stepBody(this.body, inp, DT);
+      } else {
+        const was = this.body.onGround;
+        stepBody(this.body, inp, DT);
+        if (!was && this.body.onGround && this.frameN % 2 !== 0) this.state(); // as game.ts: a landing is sent at once
+      }
       if (this.frameN++ % 2 === 0) {
         this.state();
         if (this.veh >= 0 && this.seat === 0) this.send({ t: "drive", x: this.drive.x, z: this.drive.z, yaw: this.drive.yaw, speed: this.drive.speed, rev: this.vrev });
@@ -696,8 +710,7 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
     if (!crouchRun || !sniperRun || rifleRun || c.corrections) fail("the speed limit of the stance and the launcher");
   }
 
-  // (i) Sortownia's deck under the control room's roof: plain jumps and crouch-jumps on the deck (the head hits the
-  // roof) are never corrected
+  // (i) Sortownia's deck under the control room's roof: plain jumps and crouch-jumps on the deck are never corrected
   {
     useLayout(4);
     const { sim, ids: [a], P } = room(4, [1]);
@@ -706,7 +719,7 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
     for (let i = 0; i < 30; i++) sim.step(DT);
     const c = new Client(sim, a);
     play(sim, [c], [(function* (): Gen { yield* hops(c, 4, false); yield* hops(c, 3, true); yield* walk(c, -6, -19.5); yield* hops(c, 2, false); })()], 15);
-    console.log(`Sortownia deck: 9 jumps under the 5.3 m roof, ${c.corrections} corrections (y ${c.body.y.toFixed(2)})`);
+    console.log(`Sortownia deck: 9 jumps under the control room's roof, ${c.corrections} corrections (y ${c.body.y.toFixed(2)})`);
     if (c.corrections || Math.abs(c.body.y - 2.7) > 0.01) fail("jumping on Sortownia's deck is corrected");
   }
 
@@ -791,7 +804,7 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
   // deck (Sortownia: under the roof), a ride as the forklift's thrower (throwing) with a teammate driving. No corrections
   for (const [layout, plan] of [[4, "sort"], [3, "depot"]] as const) {
     useLayout(layout);
-    const { sim, ids: [g, d] } = room(layout, [1, 1], 5);
+    const { sim, ids: [g, d], P } = room(layout, [1, 1], 5);
     let rnd = 1;
     const rand = () => { rnd = (rnd * 16807) % 2147483647; return rnd / 2147483647; };
     const cg = new Client(sim, g, { lat: 0.04, jit: 0.025, rand }), cd = new Client(sim, d, { lat: 0.05, jit: 0.02, rand });
@@ -805,6 +818,9 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
       yield* path(cg, ...side(-1));
       while (cd.veh < 0) yield inp({});
       yield* ride(cg, 4, true); mark("ride");
+      // jumps right after getting off, through a lag burst
+      cg.stalls.push([sim.time + 0.45, sim.time + 0.85]);
+      yield* hops(cg, 1, true); yield* hops(cg, 1, false); mark("dismount hops");
       if (plan === "sort") { yield* counter(cg, 1, 0, 0.5); yield* counter(cg, -1, 0, 0.5); }
       yield* idle(0.8, { mx: 0, mz: -1, walk: true });
       if (plan === "sort") {
@@ -823,7 +839,8 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
       }
       yield* ontoStack(cg); mark("stack");
       yield* counter(cg, 0, 1, 0.5);
-      for (;;) yield* idle(0.5, { mx: 0.6, mz: 0.8, crouch: false }), yield* counter(cg, -0.6, -0.8, 0.4);
+      // running to and fro with a counter-strafe and a throw at each end, and a 0.4 s lag burst in every run
+      for (;;) for (const k of [1, -1]) { cg.stalls.push([sim.time + 0.3, sim.time + 0.7]); yield* counter(cg, 0.6 * k, 0.8 * k, 0.9); }
     })();
     let driving = 0;
     const dScript = (function* (): Gen {
@@ -835,15 +852,372 @@ console.log(`  rounds overall: workers ${role[0]}, technicians ${role[1]}`);
       driving = 1; yield* idle(1.2); driving = -1; yield* idle(1); driving = -0.6; yield* idle(1); driving = 0; yield* idle(2);
       while (cg.veh >= 0) yield inp({});
       cd.send({ t: "use" });
-      yield* idle(1);
+      for (let i = 0; i < 60 && cd.veh >= 0; i++) yield inp({});
+      // off the driver's seat: a crouch-jump and a jump through a lag burst
+      cd.stalls.push([sim.time + 0.35, sim.time + 0.75]);
+      yield* hops(cd, 1, true); yield* hops(cd, 1, false);
       for (;;) yield* idle(1);
     })();
     let secs = 0;
     try {
       secs = play(sim, [cg, cd], [gScript, dScript], 60, (c) => (c === cd ? [driving, 0] : undefined));
     } catch (e) { fail(`honest minute on ${LAYOUTS[layout].name}: ${(e as Error).message}`); }
-    console.log(`honest minute on ${LAYOUTS[layout].name}: ${secs.toFixed(1)} s (${marks.join(", ")}), ${cg.shots} throws, thrower ${cg.corrections} corrections, driver ${cd.corrections}`);
-    if (cg.corrections || cd.corrections || secs < 59 || marks.length < 4) fail(`honest play on ${LAYOUTS[layout].name} is corrected`);
+    const rj = P(g).rejudged + P(d).rejudged;
+    console.log(`honest minute on ${LAYOUTS[layout].name}: ${secs.toFixed(1)} s (${marks.join(", ")}), ${cg.shots} throws, thrower ${cg.corrections} corrections, driver ${cd.corrections}, throws judged again ${rj}`);
+    if (cg.corrections || cd.corrections || secs < 59 || marks.length < 5 || rj) fail(`honest play on ${LAYOUTS[layout].name} is corrected`);
+  }
+
+  type Raw = {
+    players: Map<number, HP & { fallT: number; lastStateT: number }>;
+    forklifts: { st: VehicleState; rev: number }[];
+    boxes: { owner: unknown; x: number; y: number; z: number; vx: number; vy: number; vz: number; born: number }[];
+    resetMove(p: unknown): void;
+  };
+  const raw = (sim: Sim) => sim as unknown as Raw;
+  /** Put a person somewhere and start the host's record of them there. */
+  const place = (sim: Sim, p: HP, x: number, y: number, z: number) => {
+    p.body.x = x; p.body.y = y; p.body.z = z; raw(sim).resetMove(p);
+    for (let i = 0; i < 30; i++) sim.step(DT);
+  };
+
+  // (l) a correction takes the host's crouch: under the old 5.3 m roof of Sortownia's control room (put back for this
+  // check), one refused state just after the legs come down from a crouch-jump's tuck used to leave the client standing
+  // with its head in the roof, and every later state was refused. Now that refusal is the only correction
+  {
+    useLayout(4);
+    const list = LAYOUTS[4].boxes as Box[];
+    list.push({ kind: "block", x0: -16, x1: -3, z0: -22, z1: -16.8, y0: 5.3, y1: 5.5 });
+    const trial = (inj: number, oldFix: boolean) => {
+      const { sim, ids: [a], P } = room(4, [1]);
+      place(sim, P(a), -10, 2.7, -19.5);
+      const c = new Client(sim, a, { lat: 0.025, jit: 0, rand: Math.random });
+      c.oldFix = oldFix;
+      play(sim, [c], [(function* (): Gen {
+        for (let i = 0; i < 180; i++) {
+          if (i === inj) c.send({ t: "state", x: c.body.x + 5, y: c.body.y, z: c.body.z, yaw: 0, pitch: 0, moving: false, spawn: c.spawn, crouch: !!c.body.crouch });
+          yield inp({ jump: i < 1, crouch: i >= 6 && i < 15 });
+        }
+      })()], 4);
+      return c.corrections;
+    };
+    let worstOld = 0, worstNew = 0;
+    for (let inj = 12; inj <= 34; inj += 2) { worstOld = Math.max(worstOld, trial(inj, true)); worstNew = Math.max(worstNew, trial(inj, false)); }
+    list.pop();
+    console.log(`a refused state after a tuck under a 5.3 m roof: at most ${worstNew} correction(s) (taking only the host's position, as before: up to ${worstOld})`);
+    if (worstNew > 1) fail("a correction under a low roof loops");
+  }
+
+  // (m) off the forklift the lag credit is whole: a jump and a crouch-jump right after getting off, through 0.35 to
+  // 0.45 s lag bursts, are never corrected
+  {
+    useLayout(4);
+    let corr = 0, n = 0, credit = 9;
+    for (const [jumpAfter, off, len, tuck] of [[0.1, 0.5, 0.35, true], [0.1, 0.4, 0.45, true], [0.1, 0.3, 0.4, false], [0.6, 0.4, 0.4, true], [0.6, 0.5, 0.4, true], [0.6, 0.6, 0.4, true], [0.6, 0.45, 0.45, false]] as const) {
+      const { sim, ids: [a], P } = room(4, [1]);
+      const pa = P(a), fk = raw(sim).forklifts[0].st;
+      place(sim, pa, fk.x, 0, fk.z + 1.9);
+      const c = new Client(sim, a);
+      play(sim, [c], [(function* (): Gen {
+        yield* idle(0.5);
+        c.send({ t: "use" });
+        for (let i = 0; i < 60 && c.veh < 0; i++) yield inp({});
+        yield* idle(1.2);
+        c.send({ t: "use" });
+        for (let i = 0; i < 60 && c.veh >= 0; i++) yield inp({});
+        yield* idle(0.15);
+        credit = Math.min(credit, pa.lagCredit);
+        yield* idle(jumpAfter);
+        c.stalls.push([sim.time + off, sim.time + off + len]);
+        yield* hops(c, 1, tuck);
+        yield* idle(1);
+      })()], 8);
+      corr += c.corrections; n++;
+    }
+    console.log(`jumps off a forklift through a lag burst: ${corr} corrections in ${n} runs (lag credit after getting off ${credit.toFixed(2)} s)`);
+    if (corr || credit < 0.2) fail("getting off a forklift spends the lag credit");
+  }
+
+  // (n) running through an uplink lag burst: the queued states fit the time they were sent over, so 0.3 to 0.45 s
+  // bursts (one, or two 1.2 s apart) pass with the Paczkownik and the Kartonomiot; a client that runs too fast and
+  // hides it in bursts is still sent back, and the host never sees it faster than the launcher's run on average
+  {
+    useLayout(4);
+    const [ox, oz] = openDisc(4);
+    let corr = 0, n = 0;
+    for (const w of ["rifle", "pistol"] as const) for (const bursts of [[0.3], [0.35], [0.4], [0.45], [0.3, 0.3], [0.4, 0.4]]) {
+      const { sim, ids: [a], P } = room(4, [1]);
+      const pa = P(a);
+      if (w === "pistol") sim.receive(a, { t: "switch", w });
+      place(sim, pa, ox, 0, oz - 3);
+      const c = new Client(sim, a);
+      let t = 0;
+      play(sim, [c], [(function* (): Gen {
+        yield* idle(0.5);
+        const t0 = sim.time;
+        bursts.forEach((b, k) => c.stalls.push([t0 + 2 + k * 1.2, t0 + 2 + k * 1.2 + b]));
+        for (let i = 0; i < 5 * TICK_HZ; i++, t += DT) yield inp({ mx: Math.cos(t * 1.3), mz: Math.sin(t * 1.3), speed: maxSpeed(w) });
+      })()], 7);
+      corr += c.corrections; n++;
+    }
+    // too fast (5.6 m/s with the Kartonomiot), its states held back for 0.4 s out of every 0.8 s
+    const { sim, ids: [a], P } = room(4, [1]);
+    const pa = P(a);
+    place(sim, pa, ox + 3, 0, oz);
+    const sp0 = pa.spawn;
+    let ang = 0, path = 0, lx = pa.body.x, lz = pa.body.z;
+    const queue: ClientMsg[] = [];
+    for (let i = 0; i < 8 * TICK_HZ; i++) {
+      ang += 5.6 / 3 * DT;
+      if (i % 2 === 0) queue.push({ t: "state", x: ox + Math.cos(ang) * 3, y: 0, z: oz + Math.sin(ang) * 3, yaw: 0, pitch: 0, moving: true, spawn: pa.spawn });
+      if (i % 48 >= 24) { for (const m of queue) sim.receive(a, { ...m, spawn: pa.spawn } as ClientMsg); queue.length = 0; }
+      sim.step(DT);
+      path += Math.hypot(pa.body.x - lx, pa.body.z - lz); lx = pa.body.x; lz = pa.body.z;
+    }
+    const fastCorr = pa.spawn - sp0, avg = path / 8;
+    console.log(`running through lag bursts: ${corr} corrections in ${n} runs; a 5.6 m/s run hidden in 0.4 s bursts corrected ${fastCorr}x, host average ${avg.toFixed(2)} m/s`);
+    if (corr || !fastCorr || avg > maxSpeed("rifle") * 1.2) fail("the speed budget and lag bursts");
+  }
+
+  // (o) Sortownia: at least 2.9 m free above everything one can stand on (no head bumps on a jump, under the control
+  // room's roof included), and jumps on the deck, on the desk and on the parapet under that roof are never corrected
+  {
+    useLayout(4);
+    let low = 0, where = "";
+    for (let x = HALL.x0 + 0.5; x < HALL.x1; x += 0.25) for (let z = HALL.z0 + 0.5; z < HALL.z1; z += 0.25) {
+      const over = BOXES.filter((b) => x + PLAYER_R > b.x0 && x - PLAYER_R < b.x1 && z + PLAYER_R > b.z0 && z - PLAYER_R < b.z1);
+      for (const y of [0, ...over.map((b) => b.y1)]) {
+        if (y > 6 || blocked(x, y + 0.01, z, false, PLAYER_H - 0.02)) continue; // nothing reaches above 6 m here
+        let free = HALL.h - y;
+        for (const b of over) if (b.y0 >= y + 0.01) free = Math.min(free, b.y0 - y);
+        if (free < 2.9) { low++; where ||= `(${x}, ${y}, ${z}) ${free.toFixed(2)} m`; }
+      }
+    }
+    const { sim, ids: [a], P } = room(4, [1]);
+    place(sim, P(a), -10, 2.7, -19.5);
+    const c = new Client(sim, a);
+    let deskY = 0, parY = 0;
+    play(sim, [c], [(function* (): Gen {
+      yield* hops(c, 2, false); yield* hops(c, 2, true);
+      // onto the desk (0.85 m: a jump) and jumps on it
+      yield* walk(c, -10, -19);
+      for (let i = 0; i < 90 && !(c.body.onGround && c.body.y > 3.5); i++) yield inp({ mx: 0, mz: -1, jump: c.body.z < -20.2 });
+      yield* idle(0.3); deskY = c.body.y;
+      yield* hops(c, 2, false); yield* hops(c, 1, true);
+      yield* idle(0.6, { mx: 0, mz: 1 }); yield* idle(0.5);
+      // onto the parapet (1.05 m: a crouch-jump) and a jump on it
+      yield* walk(c, -8, -18.6);
+      yield* idle(0.5, { mx: 0, mz: 1, walk: true });                  // up against the parapet
+      for (let i = 0; i < 90 && !(c.body.onGround && c.body.y > 3.7); i++) yield inp({ mx: 0, mz: c.body.z < -17.45 ? 1 : 0, jump: i === 1, crouch: i > 4 && i < 30 });
+      yield* idle(0.4); parY = c.body.y;
+      yield* hops(c, 1, false);
+      yield* idle(0.4);
+    })()], 20);
+    console.log(`Sortownia head room: ${low} standing spots with less than 2.9 m free ${where}; jumps under the control room's roof on the deck, the desk (y ${deskY.toFixed(2)}) and the parapet (y ${parY.toFixed(2)}): ${c.corrections} corrections`);
+    if (low || c.corrections || Math.abs(deskY - 3.55) > 0.01 || Math.abs(parY - 3.75) > 0.01) fail("head room on Sortownia");
+  }
+
+  // (p) no hovering: a client that alternates a refused state with a good one in the air, or that goes quiet (or sends
+  // only stale states) at the top of a jump, comes down on the host. An honest jump or drop with one refused state at
+  // any moment is corrected once and falls on from there
+  {
+    useLayout(4);
+    const { sim, ids: [a], P } = room(4, [1]);
+    const pa = P(a);
+    const up = () => { place(sim, pa, -2, 0, 10); for (let i = 1; i <= 7; i++) { sim.receive(a, { t: "state", x: -2, y: i * 0.2, z: 10, yaw: 0, pitch: 0, moving: true, spawn: pa.spawn }); sim.step(DT); sim.step(DT); } };
+    up();
+    let acc = 0;
+    for (let k = 0; k < 150; k++) {
+      sim.receive(a, { t: "state", x: 500, y: 1.4, z: 10, yaw: 0, pitch: 0, moving: true, spawn: pa.spawn }); sim.step(DT);
+      const sp = pa.spawn;
+      sim.receive(a, { t: "state", x: pa.body.x, y: 1.4, z: pa.body.z + 0.06, yaw: 0, pitch: 0, moving: true, spawn: pa.spawn });
+      if (pa.spawn === sp) acc++;
+      sim.step(DT);
+    }
+    const loopY = pa.body.y, loopAcc = acc;
+    up();
+    for (let i = 0; i < TICK_HZ; i++) sim.step(DT);
+    const silentY = pa.body.y;
+    up();
+    for (let i = 0; i < TICK_HZ; i++) { sim.receive(a, { t: "state", x: -2, y: 1.4, z: 10, yaw: 0, pitch: 0, moving: true, spawn: pa.spawn - 1 }); sim.step(DT); }
+    const staleY = pa.body.y;
+    // honest: a jump on the floor and the 2.7 m drop off the switch cabinet, one refused state at a time
+    let worst = 0;
+    for (const [x, y, z, drop] of [[-2, 0, 10, false], [-15, 2.7, -16.2, true]] as const) for (let inj = 2; inj <= (drop ? 62 : 40); inj += 3) {
+      const h = room(4, [1]);
+      place(h.sim, h.P(h.ids[0]), x, y, z);
+      const c = new Client(h.sim, h.ids[0]);
+      play(h.sim, [c], [(function* (): Gen {
+        for (let i = 0; i < 100; i++) {
+          if (i === inj) c.send({ t: "state", x: c.body.x + 5, y: c.body.y, z: c.body.z, yaw: 0, pitch: 0, moving: false, spawn: c.spawn, crouch: false });
+          yield drop ? inp({ mx: 0, mz: i < 45 ? 1 : 0 }) : inp({ jump: i === 0, mx: 0.7, mz: 0 });
+        }
+      })()], 3);
+      worst = Math.max(worst, c.corrections);
+      if (process.env.DBG && c.corrections > 1) console.log(`  drop ${drop} inj ${inj}: ${c.corrections}`);
+    }
+    console.log(`hovering: refused and good states in turn ${loopAcc}/150 good ones accepted, host y ${loopY.toFixed(2)}; a quiet client after 1 s at y ${silentY.toFixed(2)}, stale states only ${staleY.toFixed(2)}; honest jumps and drops with one refused state: at most ${worst} correction(s)`);
+    if (loopY > 0.05 || silentY > 0.05 || staleY > 0.05 || worst > 1) fail("hovering on the host");
+  }
+
+  // (q) the air's speed limit needs a real lift-off: a crouched client at full run with its feet a few centimetres
+  // up, touching the floor now and then, and a Dalekomiot carrier doing the same over its run, are sent back and held
+  // to the stance's speed. Feet 0.3 m up (off the floor, not lifted off: a ledge walked off, a tuck) keep at most the
+  // launcher's run speed. Honest: crouch-jumps from a run, a crouch after running off the deck's edge
+  {
+    useLayout(4);
+    const [ox, oz] = openDisc(4);
+    const lie = (w: WeaponId, crouch: boolean, v: number, yOf: (k: number) => number) => {
+      const { sim, ids: [a], P } = room(4, [1]);
+      const pa = P(a);
+      if (w !== "rifle") { sim.receive(a, { t: "buy", item: w }); sim.receive(a, { t: "switch", w }); }
+      place(sim, pa, ox + 3, 0, oz);
+      const sp0 = pa.spawn;
+      let ang = 0, path = 0, lx = pa.body.x, lz = pa.body.z;
+      for (let k = 0; k < 6 * 30; k++) {
+        ang += v / 3 / 30;
+        sim.receive(a, { t: "state", x: ox + Math.cos(ang) * 3, y: yOf(k), z: oz + Math.sin(ang) * 3, yaw: 0, pitch: 0, moving: true, spawn: pa.spawn, crouch });
+        sim.step(DT); sim.step(DT);
+        path += Math.hypot(pa.body.x - lx, pa.body.z - lz); lx = pa.body.x; lz = pa.body.z;
+      }
+      return [pa.spawn - sp0, path / 6];
+    };
+    const crouchRun = maxSpeed("rifle") * 0.34 * 1.3;
+    const r = [
+      lie("rifle", true, 4.22, (k) => (k % 2 ? 0.05 : 0)),
+      lie("rifle", true, 4.22, (k) => (k % 10 ? 0.04 : 0)),
+      lie("rifle", true, 6, (k) => (k % 20 ? 0.04 : 0)),
+      lie("rifle", true, 4.22, (k) => (k % 20 ? 0.3 : 0)),
+    ];
+    const sn = lie("sniper", false, 5.5, (k) => (k % 2 ? 0.05 : 0));
+    const { sim, ids: [a], P } = room(4, [1]);
+    place(sim, P(a), -10, 2.7, -19.5);
+    const c = new Client(sim, a);
+    play(sim, [c], [(function* (): Gen {
+      yield* idle(0.6, { mx: 1, mz: 0 });
+      for (let k = 0; k < 2; k++) { yield inp({ mx: 1, mz: 0, jump: true }); for (let i = 0; i < 60 && !c.body.onGround; i++) yield inp({ mx: 1, mz: 0, crouch: i > 3 }); yield* idle(0.3, { mx: k ? 1 : -1, mz: 0 }); }
+      yield* walk(c, -15, -19); yield* walk(c, -15, -16.2);
+      for (let i = 0; i < 70; i++) yield inp({ mx: 0, mz: 1, crouch: !c.body.onGround }); // run off the switch cabinet's edge, crouch in the air
+      yield* idle(0.5);
+    })()], 10);
+    console.log(`air-speed abuse (corrections, host m/s): crouched 4.2 m/s at 5 cm every other state ${r[0][0]}x ${r[0][1].toFixed(2)}, at 4 cm touching every 10th ${r[1][0]}x ${r[1][1].toFixed(2)}, 6 m/s touching every 20th ${r[2][0]}x ${r[2][1].toFixed(2)}, at 0.3 m ${r[3][0]}x ${r[3][1].toFixed(2)}; Dalekomiot 5.5 m/s at 5 cm ${sn[0]}x ${sn[1].toFixed(2)}; honest crouch-jumps from a run and a crouch off the deck's edge: ${c.corrections} corrections (y ${c.body.y.toFixed(2)})`);
+    if (r.slice(0, 3).some(([n, v]) => !n || v > crouchRun * 1.25) || r[3][1] > maxSpeed("rifle") * 1.2 || !sn[0] || sn[1] > maxSpeed("sniper") * 1.25 || c.corrections || c.body.y > 0.01) fail("the air's speed limit");
+  }
+
+  // (t) the crouch-jump's tuck once per jump: tapping crouch in the air with the legs over the parapet's top (where
+  // they cannot come down again) used to lift the feet by TUCK at every tap, under the raised roof, and the host
+  // refused that. 2000 random jumps against the parapet with crouch and forward taps never get the feet above one jump
+  // and one tuck. Crouch-hops on the deck, Space pressed again in the air (each hop leaves the ground the step after
+  // it lands; the landing is sent at once), are never corrected
+  {
+    useLayout(4);
+    let peak = 0, r = 1;
+    const rnd = () => { r = (r * 16807) % 2147483647; return r / 2147483647; };
+    for (let k = 0; k < 2000; k++) {
+      const b: Body = { x: -9.7, y: 2.7, z: -17.66, vx: 0, vy: 0, vz: 0, onGround: true };
+      const pc = rnd();
+      for (let i = 0; i < 70; i++) { stepBody(b, { mx: 0, mz: rnd() < 0.6 ? 1 : 0, jump: i === 0, crouch: i > 3 && rnd() < pc }, DT); peak = Math.max(peak, b.y); }
+    }
+    const { sim, ids: [a], P } = room(4, [1]);
+    place(sim, P(a), -6, 2.7, -19.5);
+    const c = new Client(sim, a);
+    play(sim, [c], [(function* (): Gen {
+      for (let k = 0; k < 8; k++) { yield inp({ jump: true }); for (let i = 0; i < 60 && !c.body.onGround; i++) yield inp({ jump: c.body.vy < -2, crouch: i > 4 }); }
+      yield* idle(0.5);
+    })()], 15);
+    console.log(`crouch taps in the air over the parapet: feet at most ${peak.toFixed(2)} m (a jump and a tuck from the deck: ${(2.7 + 1.06 + 0.35).toFixed(2)}); crouch-hops: ${c.corrections} corrections`);
+    if (peak > 2.7 + 1.06 + 0.35 || c.corrections) fail("tapping crouch in the air climbs");
+  }
+
+  // (r) a forklift driver who reports speed 0 while driving at 8 m/s: the host measures the drive, so its rear thrower
+  // throws as badly as behind an honest driver
+  {
+    const ride = (claim: (v: number) => number) => {
+      useLayout(0);
+      const { sim, ids: [d, g], P } = room(0, [0, 0], 3);
+      const f = raw(sim).forklifts[0];
+      for (const id of [d, g]) { const b = P(id).body; b.x = f.st.x; b.z = f.st.z + 1.8; b.y = 0; }
+      sim.receive(d, { t: "use" }); sim.receive(g, { t: "use" });
+      const pg = P(g);
+      let x = f.st.x, dir = 1, sum = 0, n = 0;
+      const x0 = f.st.x, z = f.st.z;
+      for (let s = 0; s < 30; s++) {
+        for (let i = 0; i < TICK_HZ / 2; i++) {
+          let nx = x + dir * 8 * DT;
+          if (Math.abs(nx - x0) > 6) { dir = -dir; nx = x + dir * 8 * DT; }
+          sim.receive(d, { t: "drive", x: nx, z, yaw: dir > 0 ? 0 : Math.PI, speed: claim(8), rev: f.rev });
+          sim.step(DT);
+          x = f.st.x;
+        }
+        sim.coneOf(g);
+        const py = pg.aim.py, pp = pg.aim.pp;
+        sim.receive(g, { t: "shoot", w: "rifle", yaw: 1, pitch: 0, view: sim.time, spd: 0, air: false });
+        for (const e of sim.drainEvents()) if (e.k === "shot" && e.id === g) { sum += devOf(e.dirs, 1 + py, pp); n++; }
+      }
+      return n ? sum / n : 0;
+    };
+    const honest = ride((v) => v), liar = ride(() => 0);
+    console.log(`forklift thrower at 8 m/s (mean deviation): honest driver ${mr(honest)} mrad, driver claiming speed 0 ${mr(liar)} mrad`);
+    if (!(liar > honest * 0.75)) fail("a forklift driver can hide its speed from the thrower's spread");
+  }
+
+  // (s) a runner that freezes its reported position for a few ticks before each throw (and catches up after) gets its
+  // boxes, still in flight, thrown again with the cone of the run; an honest counter-strafe, followed at once by a run
+  // the other way, through lag bursts after the throws, never is
+  {
+    useLayout(0);
+    const { sim, ids: [a], P } = room(0, [0]);
+    const pa = P(a);
+    const [cx, cz] = openDisc(4);
+    const R = 4, V = maxSpeed("rifle");
+    let ang = 0;
+    const at = (q: number): [number, number] => [cx + Math.cos(q) * R, cz + Math.sin(q) * R];
+    const throws = (freeze: number, v = V) => {
+      [pa.body.x, pa.body.z] = at(ang); place(sim, pa, pa.body.x, 0, pa.body.z);
+      let sum = 0, n = 0, sent = at(ang);
+      for (let s = 0; s < 20; s++) {
+        for (let i = 0; i < TICK_HZ; i++) {
+          ang += (v / R) * DT;
+          if (i < TICK_HZ - freeze) sent = at(ang);
+          sim.receive(a, { t: "state", x: sent[0], y: 0, z: sent[1], yaw: 0, pitch: 0, moving: true, spawn: pa.spawn });
+          sim.step(DT);
+        }
+        sim.coneOf(a);
+        const yaw = 0.3, py = pa.aim.py, pp = pa.aim.pp;
+        sim.receive(a, { t: "shoot", w: "rifle", yaw, pitch: 0, view: sim.time, spd: 0, air: false });
+        const box = raw(sim).boxes.find((b) => b.owner === pa && b.born === sim.time);
+        // the catch-up: the real position again, a few ticks on
+        for (let i = 0; i < 6; i++) { ang += (v / R) * DT; sent = at(ang); sim.receive(a, { t: "state", x: sent[0], y: 0, z: sent[1], yaw: 0, pitch: 0, moving: true, spawn: pa.spawn }); sim.step(DT); }
+        sim.drainEvents();
+        if (box) {
+          const age = sim.time - box.born, vy0 = box.vy + BOX_GRAVITY * age, l = Math.hypot(box.vx, vy0, box.vz);
+          const [vx, vy, vz] = viewDir(yaw + py, pp);
+          sum += Math.acos(Math.min(1, (box.vx * vx + vy0 * vy + box.vz * vz) / l)); n++;
+        }
+      }
+      return n ? sum / n : NaN;
+    };
+    const still = throws(0, 0);
+    const run = throws(0), frozen = throws(4), frozen8 = throws(8);
+    const rj = pa.rejudged;
+    // honest: counter-strafe, throw, run straight back the other way; lag bursts right after some throws
+    const h = room(0, [0]);
+    const ph = h.P(h.ids[0]);
+    place(h.sim, ph, cx, 0, cz);
+    const c = new Client(h.sim, h.ids[0], { lat: 0.04, jit: 0.025, rand: Math.random });
+    play(h.sim, [c], [(function* (): Gen {
+      for (let k = 0; k < 16; k++) {
+        const d = k % 2 ? 1 : -1;
+        if (k % 4 === 1) c.stalls.push([h.sim.time + 0.42, h.sim.time + 0.72]);
+        if (k % 4 === 2) c.stalls.push([h.sim.time + 0.58, h.sim.time + 0.9]);
+        if (k % 4 === 3) c.stalls.push([h.sim.time + 0.45, h.sim.time + 0.55]);
+        yield* idle(0.4, { mx: d, mz: 0 });
+        for (let i = 0; i < 30 && c.body.vx * d > 0.05; i++) yield inp({ mx: -d, mz: 0 });
+        c.shoot();
+      }
+      yield* idle(0.5);
+    })()], 20);
+    console.log(`freezing before a throw (mean deviation of the boxes in flight, mrad): standing ${mr(still)}, running ${mr(run)}, frozen 4 ticks ${mr(frozen)}, 8 ticks ${mr(frozen8)} (${rj} throws judged again); honest counter-strafes straight into a run: ${c.shots} throws, ${ph.rejudged} judged again, ${c.corrections} corrections`);
+    if (!(frozen > run * 0.6 && frozen8 > run * 0.6) || ph.rejudged || c.corrections || c.shots < 14) fail("freezing the reported position before a throw");
   }
 }
 

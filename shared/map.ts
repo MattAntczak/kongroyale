@@ -399,8 +399,11 @@ function buildSort(): Layout {
     blk(sx0, sx1, z0, z0 + RUN, 0, k * STEP, P.steps);
   }
   blk(-11.6, 1.6, -17.3, -17, DECK, DECK + 1.05, P.parapet);
-  blk(-16, -3, -22, -16.8, 5.3, 5.5, P.roof); blk(-15.6, -6.4, -22, -21.35, DECK, DECK + 0.85, P.post); // the control room: a roof, a desk under the screens
-  for (const x of [-11.75, -3.15]) blk(x - 0.15, x + 0.15, -17.3, -17, DECK + 1.05, 5.3, P.post);
+  // the control room: a roof on two posts, a desk under the screens. The roof is high enough for a jump from
+  // anything under it (ROOM_FREE above the parapet's top, the highest of them), so no head bumps on it
+  const ROOM_FREE = 2.95, ROOF = DECK + 1.05 + ROOM_FREE;
+  blk(-16, -3, -22, -16.8, ROOF, ROOF + 0.2, P.roof); blk(-15.6, -6.4, -22, -21.35, DECK, DECK + 0.85, P.post);
+  for (const x of [-11.75, -3.15]) blk(x - 0.15, x + 0.15, -17.3, -17, DECK + 1.05, ROOF, P.post);
   put(P.belt, -8, -9, 10, 1.2, 0.9); put(P.belt, 8.5, -9, 13, 1.2, 0.9);
   put(P.belt, -9.5, -1, 5, 1.2, 0.9); put(P.belt, 7, -1, 8, 1.2, 0.9);
   blk(-16, 18, -4.6, -3.4, 5.2, 5.8, P.overhead); blk(13.4, 14.6, -22, 6, 6.2, 6.8, P.overhead);

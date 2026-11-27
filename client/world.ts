@@ -1379,7 +1379,10 @@ function sortDresser(k: SortKit) {
       // the control room's roof: a lamp under it, a sign hung from its front edge, screens and a desk on the wall behind
       box(b, c); glow.add(cx, b.y0 - 0.03, cz, sx - 1.2, 0.03, 0.22, 0xf6f7ff);
       blocks.add(cx, b.y0 - 0.62, b.z1 - 0.05, 3.2, 0.6, 0.04, DARK); decals.quad(sterownia, cx, b.y0 - 0.32, b.z1 - 0.03 + 0.012, 3.0, 0.55, 0);
-      for (let x = b.x0 + 1.5; x < b.x1 - 1; x += 2.2) decals.quad(screen, x, b.y0 - 1.25, b.z0 + 0.012, 1.4, 0.86, 0);
+      // the screens hang over the desk (the post-coloured block against the back wall), not from the high roof
+      const desk = BOXES.find((o) => o.color === P.post && near2(o.z0, b.z0) && o.y1 < b.y0 - 1);
+      const sy = desk ? desk.y1 + 0.95 : b.y0 - 1.25;
+      for (let x = b.x0 + 1.5; x < b.x1 - 1; x += 2.2) decals.quad(screen, x, sy, b.z0 + 0.012, 1.4, 0.86, 0);
     } else if (c === P.post) box(b, 0x2b2f36);
     else if (c === P.dock) {
       box(b, 0x8a8d92);

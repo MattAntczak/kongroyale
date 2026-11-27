@@ -88,6 +88,9 @@ export interface SelfSnap {
   mag: Record<WeaponId, number>; res: Record<WeaponId, number>; owned: WeaponId[];
   /** Bumped every respawn and every forced correction: the client takes the host's position when it changes. */
   spawn: number; x: number; y: number; z: number; yaw: number;
+  /** The host's stance and fall speed at that pose: a correction takes them too (a crouched pose under a low roof stays
+   *  crouched; a correction in the air falls on as fast as the host's fall clock). */
+  crouch: boolean; vy: number;
   reloading: boolean; geo: number; killedBy: string; carry: boolean;
   /** Money for the shop, and whether the shop is open right now. */
   money: number; buy: boolean;

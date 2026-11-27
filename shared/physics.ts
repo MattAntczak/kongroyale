@@ -52,6 +52,9 @@ export interface Body {
   /** Crouched (the short body); `tucked`: crouched in the air with the legs pulled up. */
   crouch?: boolean;
   tucked?: boolean;
+  /** The legs have been pulled up once in this jump: a second crouch in the same air lowers the head instead (no
+   *  climbing by tapping crouch over a ledge, where the legs cannot come down again). */
+  tuckUsed?: boolean;
   /** Seconds since the last landing from a jump (a jump right after one is weaker); in the air after a jump. */
   landed?: number;
   hopped?: boolean;
@@ -141,7 +144,7 @@ function duck(p: Body, want: boolean) {
   if (want && !p.crouch) {
     p.crouch = true;
     // in the air the legs come up instead of the head going down: the feet rise by TUCK, if there is room above
-    if (!p.onGround && !blocked(p.x, p.y + TUCK, p.z, true, CROUCH_H)) { p.y += TUCK; p.tucked = true; p.shift = (p.shift ?? 0) + TUCK; }
+    if (!p.onGround && !p.tuckUsed && !blocked(p.x, p.y + TUCK, p.z, true, CROUCH_H)) { p.y += TUCK; p.tucked = true; p.tuckUsed = true; p.shift = (p.shift ?? 0) + TUCK; }
     return;
   }
   if (!want && p.crouch) {
@@ -213,7 +216,7 @@ export function stepBody(p: Body, inp: MoveInput, dt: number) {
   }
   if (p.y > HALL.h - h) { p.y = HALL.h - h; if (p.vy > 0) p.vy = 0; }
   if (p.onGround) {
-    p.tucked = false;
+    p.tucked = false; p.tuckUsed = false;
     // landing from a jump costs speed, so hopping is never faster than running (walking off a ledge does not)
     if (!wasGround && p.hopped) { p.vx *= LAND_KEEP; p.vz *= LAND_KEEP; p.landed = 0; }
     p.hopped = false;

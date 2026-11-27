@@ -11,7 +11,7 @@
 
 import { BOXES, PICKUPS, SPAWNS, HALL, LAYOUTS, HALL_LAYOUTS, DEPOT_LAYOUT, SORT_LAYOUT, VEHICLE_SPAWNS, sites, useLayout, type Box as HallBox, type PickupKind, type PickupSpot } from "./map";
 import { SEATS, VEH_MAX_SPEED, VEH_USE_R, rideSpeed, seatPos, stepVehicle, vehicleBlocked, vehicleBox, type VehicleState } from "./vehicle";
-import { BOX_HIT_PAD, CROUCH_H, CROUCH_MUL, GRAVITY, JUMP_V, MAX_FOOT_SPEED, PLAYER_R, STEP_H, STEP_SPEED, STOP_DECEL, TUCK, PLAYER_H, blocked, ladderAt, bodyH, eyeH, lineOfSight, rayPlayer, rayWorld, setDynamicBoxes, stepBody, supported, viewDir, type Body } from "./physics";
+import { ACCEL, BOX_HIT_PAD, CROUCH_H, CROUCH_MUL, GRAVITY, JUMP_V, MAX_FOOT_SPEED, PLAYER_R, STEP_H, STEP_SPEED, STOP_DECEL, TUCK, PLAYER_H, blocked, ladderAt, bodyH, eyeH, lineOfSight, rayPlayer, rayWorld, setDynamicBoxes, stepBody, supported, viewDir, type Body } from "./physics";
 import { BOX_GRAVITY, BOX_LIFE_S, GRENADE_FUSE_S, GRENADE_GRAVITY, GRENADE_R, WEAPONS, PRICES, SHOP, MONEY_START, MONEY_MAX, MONEY_WIN, MONEY_LOSS, MONEY_KILL, MONEY_POINT, BUY_S, falloff, lobPitch, maxSpeed, newAim, resetAim, settleAim, aimCone, kickAim, type AimState, type WeaponId } from "./weapons";
 import { findPath, freeAt, randomFree, walkable } from "./nav";
 import type { ClientMsg, Config, Difficulty, Ev, HostMsg, Mission, ObjSnap, PlayerSnap, SelfSnap } from "./proto";
@@ -44,12 +44,19 @@ export const MAX_REWIND_S = 0.3;
 export const SAFE_FALL_M = 4.5;
 export const FALL_DMG_PER_M = 14;
 const HIST = 48;
+/** Poses of a driven forklift kept for its speed, and the time they span (s). */
+const TRAIL = 24;
+const TRAIL_S = 0.3;
 /** One history entry: time, x, y, z, crouched. */
 const HS = 5;
 /** The host's movement check: a budget of metres that refills at the top speed of what the host saw (with slack)
  *  and holds at most MOVE_BURST, so bunched-up messages pass and a steady over-speed runs dry within a few seconds. */
 const MOVE_SLACK = 1.05;
 const MOVE_BURST = 1.5;
+/** After a gap (a lag burst of queued states) the budget may hold more than MOVE_BURST: what the gap refilled, at most
+ *  LAG_ROOM_S of it, so an honest runner's queued states fit the time they were sent over; the room drains again at
+ *  the same rate. The long-run speed is still the cap. */
+const LAG_ROOM_S = 0.4;
 /** On the ground the top speed is the launcher's run (crouched: the crouch's share of it), with more slack than in the
  *  air: the budget spent on a lag burst comes back within a couple of seconds of running flat out. */
 const GROUND_SLACK = 1.15;
@@ -71,12 +78,30 @@ const AIR_JIT_S = 0.2;
 /** A state that comes late (a lag burst) does not count its wait into the fall: up to LAG_CREDIT_S of waiting is
  *  forgiven, refilled at a tenth of real time, so a client cannot slow the clock by sending rarely. */
 const LAG_CREDIT_S = 0.4;
+/** The air's speed limit counts only after a believable lift-off: the feet a jump's first LIFT_M above where they
+ *  were last held up (or below it: walking off an edge). A state within NEAR_M of a surface stands on it. */
+const LIFT_M = 0.5;
+const NEAR_M = 0.1;
+/** The host's own gravity: a person whose last accepted state is older than SILENT_S falls by stepBody. */
+const SILENT_S = 0.25;
+/** Throws judged near standing are re-judged while their boxes fly (up to REJUDGE_S after the position they were
+ *  judged by) when a later position shows more ground covered than a body at rest at the throw could cover: one at
+ *  REJUDGE_V or less that accelerates flat out (ACCEL) to its launcher's run, with REJUDGE_JIT seconds of jitter. */
+const REJUDGE_S = 0.5;
+const REJUDGE_V = 1;
+const REJUDGE_JIT = 0.08;
 /** Bots hear someone running this close (metres): a little less than people do (25 m), they do not listen as well. */
 const STEP_HEAR_M = 20;
 const leadPos = [0, 0, 0];
 const mvA = [0, 0], mvB = [0, 0];
 const tmpSeat = [0, 0, 0];
 const goalTmp = [0, 0];
+/** How long a jump takes to lift the feet by `h` (all of JUMP_UP_S at its top or above). */
+function riseTime(h: number): number {
+  if (h <= 0) return 0;
+  if (h >= JUMP_RISE) return JUMP_UP_S;
+  return (JUMP_V - Math.sqrt(JUMP_V * JUMP_V - 2 * GRAVITY * h)) / GRAVITY;
+}
 /** The highest box top a body with its feet at `y` could step up onto (STEP_H, twice at most) on its way from
  *  (ax, az) to (bx, bz): a step-up and a jump can both fall between two states. */
 function stepTop(ax: number, az: number, bx: number, bz: number, y: number): number {
@@ -173,6 +198,12 @@ interface Player {
    *  whether the last accepted pose was held up (ground, a box, a forklift, a ladder), the credit for late states, and
    *  a correction to start the next state from. */
   topY: number; fallT: number; held: boolean; lagCredit: number; vfix: boolean;
+  /** Where the feet were last held up, and how far above that they have been since (a believable lift-off, LIFT_M);
+   *  the budget's extra room after a lag burst; the host time of the last accepted state, and whether the host is
+   *  moving the body by its own gravity since (a silent client). */
+  heldY: number; airUp: number; lagRoom: number; lastOkT: number; grav: boolean;
+  /** Recent throws judged near standing, to re-judge (see REJUDGE_S); how many were. */
+  judged: Judged[]; rejudged: number;
   hist: Float64Array; histN: number;
   brain: Brain | null;
   /** The forklift this player rides (-1 on foot) and the seat: 0 drives, 1 throws from the rear platform. */
@@ -185,8 +216,17 @@ interface Player {
   group: Team;
 }
 
+/** A throw the host judged near standing: the position (and its time) it was judged by, the speed used, what the cone
+ *  needs to be worked out again, and its boxes. */
+interface Judged {
+  t: number; x: number; z: number; spd: number; w: WeaponId; aim: AimState; air: boolean; crouch: boolean; sight: boolean;
+  yaw: number; pitch: number; cone: number; ox: number; oy: number; oz: number; boxes: Box[];
+}
+
 interface Forklift {
   id: number; st: VehicleState;
+  /** The host's own speed of it: the accepted poses as [time, x, z] (one per tick, newest last) and the speed they show. */
+  trail: Float64Array; trailN: number; seen: number;
   /** Riders by seat (driver, thrower). */
   riders: [Player | null, Player | null];
   /** Bumped when the host overrules the driver's pose: the driver then takes the host's. */
@@ -267,6 +307,7 @@ export class Sim {
       fireReady: 0, lastFire: -99, reloadUntil: 0, k: 0, d: 0, spawn: 0, protectUntil: 0, geoUntil: 0, lastStateT: 0,
       aim: newAim(), hspeed: 0, budget: MOVE_BURST, mv: new Float64Array(SPEED_SAMPLES * 3), mvN: 0,
       topY: 0, fallT: 0, held: true, lagCredit: LAG_CREDIT_S, vfix: false,
+      heldY: 0, airUp: 0, lagRoom: 0, lastOkT: 0, grav: false, judged: [], rejudged: 0,
       hist: new Float64Array(HIST * HS), histN: 0,
       veh: -1, seat: 0, fallFrom: 0, acting: false, carry: false, group: team,
       brain: bot ? {
@@ -361,7 +402,7 @@ export class Sim {
     this.score[0] = 0; this.score[1] = 0;
     this.wins[0] = 0; this.wins[1] = 0; this.round = 0; this.swapped = false;
     this.boxes.length = 0;
-    this.forklifts = VEHICLE_SPAWNS.map((v, i) => ({ id: i, st: { x: v.x, z: v.z, yaw: v.yaw, speed: 0 }, riders: [null, null], rev: 0, lastDriveT: 0 }));
+    this.forklifts = VEHICLE_SPAWNS.map((v, i) => ({ id: i, st: { x: v.x, z: v.z, yaw: v.yaw, speed: 0 }, riders: [null, null], rev: 0, lastDriveT: 0, trail: new Float64Array(TRAIL * 3), trailN: 0, seen: 0 }));
     this.dynBoxes = VEHICLE_SPAWNS.map(() => ({ kind: "forklift", x0: 0, x1: 0, y0: 0, y1: 0, z0: 0, z1: 0 }));
     this.pickups = PICKUPS.map((spot) => ({ spot, readyAt: 0 }));
     for (const p of this.players.values()) { p.k = 0; p.d = 0; p.veh = -1; p.team = p.group; p.money = MONEY_START; this.respawn(p, false); }
@@ -406,32 +447,50 @@ export class Sim {
     const b = p.body;
     const crouch = !!m.crouch, h = crouch ? CROUCH_H : PLAYER_H;
     const dh = Math.hypot(m.x - b.x, m.z - b.z);
+    const onLadder = !!ladderAt(m.x, m.y, m.z);
     // the speed limit as a budget of metres: it refills with the time between messages, so two messages that arrive
     // in one tick pass, while a client that keeps moving faster than it can runs it dry. How fast it can: on the ground
-    // the running speed of the launcher in hand, crouched (in this state or the last) the crouch's share of it; in the
-    // air (a crouch-jump keeps its run-up, an air strafe) or on a ladder, the fastest anyone moves on foot. Slowing
-    // down after a landing, a crouch or a change of launcher takes a moment: the budget carries that
-    const ground = this.standsAt(b.x, b.y, b.z) && this.standsAt(m.x, m.y, m.z);
-    const cap = ground ? maxSpeed(p.w, false) * (crouch || b.crouch ? CROUCH_MUL * CROUCH_SLACK : GROUND_SLACK) : MAX_FOOT_SPEED * MOVE_SLACK;
-    p.budget = Math.min(MOVE_BURST, p.budget + cap * dt);
+    // (a state within NEAR_M of a surface stands on it) the running speed of the launcher in hand, crouched (in this
+    // state or the last) the crouch's share of it; in the air (a crouch-jump keeps its run-up, an air strafe) or on a
+    // ladder, the fastest anyone moves on foot, but the air only once the feet have really left: a jump's first LIFT_M,
+    // or a drop below where they stood. Slowing down after a landing, a crouch or a change of launcher takes a moment:
+    // the budget carries that
+    const lifted = Math.max(p.airUp, m.y - p.heldY) >= LIFT_M || m.y < p.heldY - NEAR_M || onLadder || !!ladderAt(b.x, b.y, b.z);
+    // between two states on the ground the stance counts (crouched: its share); a state off the ground that has not
+    // really lifted off (a step or ledge walked off, the tuck of a crouch tapped in the air) keeps the run's speed,
+    // the launcher's; only a real lift-off between two airborne states (or a ladder) gets the air's
+    const gB = this.nearGround(b.x, b.y, b.z), gM = this.nearGround(m.x, m.y, m.z);
+    const ladder = onLadder || !!ladderAt(b.x, b.y, b.z);
+    const cap = ladder || (lifted && !gB && !gM) ? MAX_FOOT_SPEED * MOVE_SLACK
+      : maxSpeed(p.w, false) * (gB && gM && (crouch || b.crouch) ? CROUCH_MUL * CROUCH_SLACK : GROUND_SLACK);
+    // a gap before this state (a lag burst) makes room for the states queued behind it
+    p.lagRoom = Math.max(Math.max(0, p.lagRoom - cap * dt), cap * Math.min(LAG_ROOM_S, Math.max(0, dt - 0.05)));
+    p.budget = Math.min(MOVE_BURST + p.lagRoom, p.budget + cap * dt);
     const okSpeed = dh <= p.budget + 0.05;
     const okY = m.y >= -0.01 && m.y <= HALL.h && m.y - b.y <= 1.6 * Math.max(dt, 0.1) * 8;
     const inside = m.x > HALL.x0 && m.x < HALL.x1 && m.z > HALL.z0 && m.z < HALL.z1;
     // gravity: the feet go up only by a jump (the tuck, a step-up just before it) from where they were last held up, or
     // on a ladder; in the air they come down. A state that arrives late does not count its wait
-    const forgive = Math.min(p.lagCredit, Math.max(0, dt - 0.05));
-    p.lagCredit = Math.min(LAG_CREDIT_S, p.lagCredit - forgive + dt * 0.1);
-    let fallT = p.fallT + dt - forgive, top = p.topY, held0 = p.held;
+    let top = p.topY, held0 = p.held, clock = p.fallT;
     if (p.vfix) {
-      // after a correction the client starts again from the host's pose, at rest: from there it only falls (or jumps,
-      // when that pose stands on something), never higher than before
+      // after a correction the client starts again from the host's pose (and its fall speed, `vy` in the snapshot):
+      // from there it only falls on the same clock (or jumps, when that pose stands on something), never higher
       p.vfix = false;
       held0 = this.standsAt(b.x, b.y, b.z) || !!ladderAt(b.x, b.y, b.z);
-      if (held0) top = b.y + RISE; else { top = Math.min(top, b.y + TUCK + 0.06); fallT = 0; }
+      // in the air: the top of the fall that passes through the host's pose at its speed (plus a tuck), on the clock
+      if (held0) { top = b.y + RISE; clock = -JUMP_UP_S; } else top = Math.min(top, b.y + Math.min(0, b.vy) ** 2 / (2 * GRAVITY) + TUCK + 0.06);
     }
+    // the wait before this state: from something that held the feet up, a jump may have begun at any moment of it, so
+    // the clock counts no more of it than the rise to this height takes (and spends no credit); in the air a late
+    // state is forgiven up to the lag credit
+    let forgive: number;
+    if (held0) forgive = Math.max(0, dt - riseTime(m.y - b.y));
+    else { forgive = Math.min(p.lagCredit, Math.max(0, dt - 0.05)); p.lagCredit -= forgive; }
+    p.lagCredit = Math.min(LAG_CREDIT_S, p.lagCredit + dt * 0.1);
+    let fallT = clock + dt - forgive;
     if (held0) top = Math.max(top, stepTop(b.x, b.z, m.x, m.z, b.y) + RISE);
-    const onLadder = !!ladderAt(m.x, m.y, m.z);
-    const okFall = onLadder || m.y <= top - 0.5 * GRAVITY * Math.max(0, fallT - AIR_JIT_S) ** 2;
+    // landing on something is never too late (a late clock must not put the feet under the floor), but never higher
+    const okFall = onLadder || m.y <= top - 0.5 * GRAVITY * Math.max(0, fallT - AIR_JIT_S) ** 2 || (m.y <= top && this.standsAt(m.x, m.y, m.z));
     // standing (or claiming to) needs head room for the whole body: nobody stands up into a low ceiling. The test body
     // is lifted 1 cm off the floor and is 2 cm short, so one the client has just stopped against a ceiling
     // (stepBody leaves it 1 mm under) is not stuck in it. Forklifts are left out: the client saw them a moment ago
@@ -447,15 +506,86 @@ export class Sim {
         if (drop > SAFE_FALL_M) this.damage(p, p, Math.round((drop - SAFE_FALL_M) * FALL_DMG_PER_M), false, m.x, m.y, m.z, p.w);
         p.fallFrom = m.y;
       }
-      b.x = m.x; b.y = m.y; b.z = m.z;
+      b.x = m.x; b.y = m.y; b.z = m.z; b.vx = b.vy = b.vz = 0;
+      p.lastOkT = this.time; p.grav = false;
       this.sample(p);
       p.hspeed = this.winSpeed(p, p.mv[(p.mvN - 1) % SPEED_SAMPLES * 3], 0.1);
       p.held = this.standsAt(m.x, m.y, m.z) || onLadder;
-      if (p.held) { p.topY = m.y + RISE; p.fallT = -JUMP_UP_S; } else { p.topY = top; p.fallT = fallT; }
+      if (p.held) { p.topY = m.y + RISE; p.fallT = -JUMP_UP_S; p.heldY = m.y; p.airUp = 0; }
+      else { p.topY = top; p.fallT = fallT; p.airUp = Math.max(p.airUp, m.y - p.heldY); }
+      if (p.judged.length) this.rejudge(p);
     } else {
-      p.spawn++; // the client snaps back to the host's position
+      p.spawn++; // the client snaps back to the host's pose
       p.vfix = true;
+      // the fall clock keeps running through a correction, and the client falls on from the host's pose as fast as
+      // that clock says (a correction neither hangs a body in the air nor restarts its fall)
+      if (!held0) { p.fallT = fallT; if (!p.grav) b.vy = -GRAVITY * Math.max(0, fallT); }
+      else if (!p.grav) b.vy = 0;
     }
+  }
+
+  /** The host's own gravity for a person whose client has gone quiet (or sends only states that are refused or
+   *  stale): after SILENT_S without an accepted state the body falls by stepBody, with no input, from the speed of the
+   *  fall clock. Nothing hangs in the air on the host by saying nothing. */
+  private hostGravity(p: Player, dt: number) {
+    if (this.time - p.lastOkT <= SILENT_S) return;
+    const b = p.body;
+    if (!p.grav) {
+      p.grav = true;
+      b.vx = b.vz = 0;
+      b.vy = p.held ? 0 : Math.min(b.vy, -GRAVITY * Math.max(0, p.fallT + (this.time - p.lastOkT)));
+      b.onGround = p.held;
+    }
+    stepBody(b, { mx: 0, mz: 0, jump: false, crouch: !!b.crouch, climb: true }, dt);
+  }
+
+  /**
+   * Throws judged near standing, judged again by the position just accepted. A body that really stood (at most
+   * REJUDGE_V faster than judged) and then ran off flat out covers no more than `reach` by now; one that covers more
+   * was running when it threw, and only held its reported position still (a freeze before the throw, caught up
+   * after, even in the same tick). Its boxes still in flight get the cone of the speed the catch-up shows, drawn
+   * afresh. A throw judged by a position that came in a burst after a gap is left alone (steady): there the host's
+   * clock says nothing about the client's, and an honest stop, throw and run can all arrive in one tick.
+   */
+  private rejudge(p: Player) {
+    const b = p.body;
+    for (let i = p.judged.length - 1; i >= 0; i--) {
+      const j = p.judged[i], age = this.time - j.t;
+      if (age > REJUDGE_S || !j.boxes.some((x) => this.boxes.includes(x))) { p.judged.splice(i, 1); continue; }
+      const run = maxSpeed(j.w, false), vmax = run * GROUND_SLACK, a = ACCEL * run * 1.1, v0 = Math.min(vmax, j.spd + REJUDGE_V);
+      const t = age + REJUDGE_JIT, t1 = (vmax - v0) / a;
+      const reach = t <= t1 ? v0 * t + 0.5 * a * t * t : v0 * t1 + 0.5 * a * t1 * t1 + vmax * (t - t1);
+      const d = Math.hypot(b.x - j.x, b.z - j.z);
+      if (d <= reach + 0.05) continue;
+      p.judged.splice(i, 1);
+      const w = WEAPONS[j.w], spd = Math.min(maxSpeed(j.w, false), d / Math.max(age, SPEED_WIN)); // the run it hid, at most the launcher's
+      const cone = aimCone(w, j.aim, spd, j.air, j.crouch, j.sight);
+      if (cone <= j.cone) continue;
+      p.rejudged++;
+      for (const x of j.boxes) {
+        const k = this.boxes.indexOf(x);
+        if (k < 0) continue;
+        const [dx, dy, dz] = spreadDirs(j.yaw, j.pitch, cone, 1, this.rand);
+        const ft = this.time - x.born;
+        const nx = j.ox + dx * w.speed * ft, ny = j.oy + dy * w.speed * ft - 0.5 * BOX_GRAVITY * ft * ft, nz = j.oz + dz * w.speed * ft;
+        const ex = nx - j.ox, ey = ny - j.oy, ez = nz - j.oz, len = Math.hypot(ex, ey, ez);
+        // the new way may run into a wall it has passed by now: then the box ends there
+        if (len > 1e-6 && rayWorld(j.ox, j.oy, j.oz, ex / len, ey / len, ez / len, len) < len - 1e-3) { this.boxes.splice(k, 1); continue; }
+        x.x = nx; x.y = ny; x.z = nz; x.vx = dx * w.speed; x.vy = dy * w.speed - BOX_GRAVITY * ft; x.vz = dz * w.speed;
+      }
+    }
+  }
+
+  /** Feet within NEAR_M of something that holds them up (for the speed limit: a few centimetres of "air" are ground). */
+  private nearGround(x: number, y: number, z: number): boolean {
+    if (y <= NEAR_M) return true;
+    for (const b of BOXES) {
+      if (y - b.y1 > -0.02 && y - b.y1 <= NEAR_M && x + PLAYER_R > b.x0 && x - PLAYER_R < b.x1 && z + PLAYER_R > b.z0 && z - PLAYER_R < b.z1) return true;
+    }
+    for (const d of this.dynBoxes) {
+      if (y - d.y1 > -0.02 && y - d.y1 <= NEAR_M && x + PLAYER_R + 1 > d.x0 && x - PLAYER_R - 1 < d.x1 && z + PLAYER_R + 1 > d.z0 && z - PLAYER_R - 1 < d.z1) return true;
+    }
+    return false;
   }
 
   /** Feet held up at (x, y, z): the floor or a box top (supported), or the roof of a forklift (the client saw it a
@@ -466,6 +596,14 @@ export class Sim {
       if (y - d.y1 > -0.02 && y - d.y1 < 0.08 && x + PLAYER_R + 1 > d.x0 && x - PLAYER_R - 1 < d.x1 && z + PLAYER_R + 1 > d.z0 && z - PLAYER_R - 1 < d.z1) return true;
     }
     return false;
+  }
+
+  /** The latest accepted positions came at a steady pace, not in a burst after a gap: the last two intervals between
+   *  them (one position a tick) are short. */
+  private steady(p: Player): boolean {
+    if (p.mvN < 3) return false;
+    const t0 = p.mv[(p.mvN - 1) % SPEED_SAMPLES * 3], t1 = p.mv[(p.mvN - 2) % SPEED_SAMPLES * 3], t2 = p.mv[(p.mvN - 3) % SPEED_SAMPLES * 3];
+    return t0 - t1 <= 0.06 && t1 - t2 <= 0.06;
   }
 
   /** Remember an accepted position (one per tick: a later state in the same tick replaces the earlier). */
@@ -521,6 +659,9 @@ export class Sim {
     p.mvN = 0; this.sample(p);
     p.hspeed = 0; p.budget = MOVE_BURST;
     p.topY = p.body.y + RISE; p.fallT = -JUMP_UP_S; p.held = true; p.vfix = false; p.lagCredit = LAG_CREDIT_S;
+    p.heldY = p.body.y; p.airUp = 0; p.lagRoom = 0; p.grav = false; p.judged.length = 0;
+    // the clocks start now: a ride, the freeze or a death is not a wait to forgive or a gap to make room for
+    p.lastStateT = p.lastOkT = this.time;
   }
 
   // ---------------------------------------------------------------- forklifts
@@ -545,7 +686,7 @@ export class Sim {
     p.veh = best.id; p.seat = seat; p.reloadUntil = 0;
     // a rider stands (or sits) as the client shows it: onState skips the stance while riding
     p.body.crouch = false; p.body.tucked = false;
-    if (seat === 0) { best.lastDriveT = this.time; best.rev++; }
+    if (seat === 0) { best.lastDriveT = this.time; best.rev++; best.trailN = 0; best.seen = 0; }
     p.spawn++;
     this.placeRider(p, best);
     this.evs.push({ k: "ride", id: p.id, veh: best.id, seat });
@@ -589,7 +730,31 @@ export class Sim {
     const next = { x: m.x, z: m.z, yaw: m.yaw, speed: Math.max(-VEH_MAX_SPEED, Math.min(VEH_MAX_SPEED, m.speed)) };
     const ok = Math.hypot(m.x - f.st.x, m.z - f.st.z) <= VEH_MAX_SPEED * 1.4 * dt + 0.6 && !vehicleBlocked(next)
       && m.x > HALL.x0 && m.x < HALL.x1 && m.z > HALL.z0 && m.z < HALL.z1;
-    if (ok) f.st = next; else f.rev++;
+    if (ok) { f.st = next; this.trackForklift(f); } else f.rev++;
+  }
+
+  /** The host's own speed of a driven forklift, from the poses it accepted (one per tick): the path over the last
+   *  TRAIL_S seconds by the time it took. The driver's claimed speed cannot hide a drive: the rear thrower is judged
+   *  by the larger of the two (rideSpeed). */
+  private trackForklift(f: Forklift) {
+    const last = (f.trailN - 1) % TRAIL * 3;
+    if (f.trailN === 0 || f.trail[last] !== this.time) f.trailN++;
+    const i = (f.trailN - 1) % TRAIL * 3;
+    f.trail[i] = this.time; f.trail[i + 1] = f.st.x; f.trail[i + 2] = f.st.z;
+    let len = 0, span = 0, j = i;
+    for (let k = 1; k < Math.min(f.trailN, TRAIL) && span < TRAIL_S; k++) {
+      const o = (f.trailN - 1 - k) % TRAIL * 3;
+      len += Math.hypot(f.trail[j + 1] - f.trail[o + 1], f.trail[j + 2] - f.trail[o + 2]);
+      span = this.time - f.trail[o];
+      j = o;
+    }
+    f.seen = span > 0 ? Math.min(VEH_MAX_SPEED, len / Math.max(span, 0.1)) : 0;
+  }
+
+  /** How fast the forklift counts as moving for its thrower: the claim, or what the host saw while it is driven. */
+  private forkliftSpeed(f: Forklift): number {
+    const fresh = f.riders[0] && f.trailN > 0 && this.time - f.trail[(f.trailN - 1) % TRAIL * 3] < TRAIL_S;
+    return Math.max(Math.abs(f.st.speed), fresh ? f.seen : 0);
   }
 
   private stepForklifts(dt: number) {
@@ -617,7 +782,7 @@ export class Sim {
     if (m.w !== p.w && p.owned.has(m.w)) { p.w = m.w; resetAim(p.aim); }
     const b = p.body;
     const riding = p.veh >= 0;
-    const seen = riding ? rideSpeed(this.forklifts[p.veh].st) : this.seenSpeed(p);
+    const seen = riding ? rideSpeed({ ...this.forklifts[p.veh].st, speed: this.forkliftSpeed(this.forklifts[p.veh]) }) : this.seenSpeed(p);
     const spd = riding ? seen : Math.max(Number.isFinite(m.spd) ? Math.max(0, m.spd as number) : 0, seen);
     const air = !riding && (!!m.air || !this.standsAt(b.x, b.y, b.z));
     const sight = !!m.sight && WEAPONS[p.w].zoom > 1;
@@ -680,17 +845,29 @@ export class Sim {
     p.protectUntil = 0;
     settleAim(p.aim, w, this.time);
     const cone = aimCone(w, p.aim, spd, air, !!p.body.crouch, sight);
-    const dirs = spreadDirs(yaw + p.aim.py * (1 - comp), pitch + p.aim.pp * (1 - comp), cone, w.pellets, this.rand);
+    const aimYaw = yaw + p.aim.py * (1 - comp), aimPitch = pitch + p.aim.pp * (1 - comp);
+    const dirs = spreadDirs(aimYaw, aimPitch, cone, w.pellets, this.rand);
+    // a person's throw judged near standing on foot: kept to be judged again while its boxes fly (rejudge)
+    const judge = !p.bot && p.veh < 0 && spd < REJUDGE_V && p.w !== "grenade" && this.steady(p)
+      ? { t: p.mv[(p.mvN - 1) % SPEED_SAMPLES * 3], x: p.mv[(p.mvN - 1) % SPEED_SAMPLES * 3 + 1], z: p.mv[(p.mvN - 1) % SPEED_SAMPLES * 3 + 2], spd, w: p.w, aim: { ...p.aim }, air, crouch: !!p.body.crouch, sight, yaw: aimYaw, pitch: aimPitch, cone, ox: 0, oy: 0, oz: 0, boxes: [] as Box[] }
+      : null;
     kickAim(p.aim, p.w, this.time);
     const lag = Math.max(0, Math.min(MAX_REWIND_S, this.time - viewT));
     const ox = p.body.x, oy = p.body.y + eyeH(p.body.crouch), oz = p.body.z;
     const sent: number[] = [];
     for (let i = 0; i < dirs.length; i += 3) {
       const dx = dirs[i], dy = dirs[i + 1], dz = dirs[i + 2];
-      this.boxes.push({ owner: p, team: p.team, w: p.w, x: ox, y: oy, z: oz, vx: dx * w.speed, vy: dy * w.speed, vz: dz * w.speed, dist: 0, born: this.time, lag });
+      const box: Box = { owner: p, team: p.team, w: p.w, x: ox, y: oy, z: oz, vx: dx * w.speed, vy: dy * w.speed, vz: dz * w.speed, dist: 0, born: this.time, lag };
+      this.boxes.push(box);
+      judge?.boxes.push(box);
       sent.push(+dx.toFixed(4), +dy.toFixed(4), +dz.toFixed(4));
     }
     this.evs.push({ k: "shot", id: p.id, w: p.w, o: [+ox.toFixed(2), +oy.toFixed(2), +oz.toFixed(2)], dirs: sent, ...(n !== undefined ? { n } : {}) });
+    if (judge) {
+      judge.ox = ox; judge.oy = oy; judge.oz = oz;
+      p.judged.push(judge);
+      if (p.judged.length > 8) p.judged.shift();
+    }
     if (p.w === "grenade" && p.mag.grenade === 0) { p.owned.delete("grenade"); p.w = p.owned.has("rifle") ? "rifle" : p.owned.has("sniper") ? "sniper" : p.owned.has("shotgun") ? "shotgun" : "pistol"; p.fireReady = this.time + 0.4; }
     else if (p.mag[p.w] === 0) this.startReload(p);
   }
@@ -772,7 +949,7 @@ export class Sim {
     }
     this.plant = 0; this.defuse = 0; this.armed = -1; this.caseAt = null; this.boxes.length = 0;
     this.botSite = this.rand() < 0.5 ? 0 : 1;
-    this.forklifts = VEHICLE_SPAWNS.map((v, i) => ({ id: i, st: { x: v.x, z: v.z, yaw: v.yaw, speed: 0 }, riders: [null, null], rev: (this.forklifts[i]?.rev ?? 0) + 1, lastDriveT: 0 }));
+    this.forklifts = VEHICLE_SPAWNS.map((v, i) => ({ id: i, st: { x: v.x, z: v.z, yaw: v.yaw, speed: 0 }, riders: [null, null], rev: (this.forklifts[i]?.rev ?? 0) + 1, lastDriveT: 0, trail: new Float64Array(TRAIL * 3), trailN: 0, seen: 0 }));
     for (const pk of this.pickups) pk.readyAt = 0;
     this.spawnSeq = [Math.floor(this.rand() * 10), Math.floor(this.rand() * 10)];
     // whoever lived through the last round keeps their launchers; the others are back to the Paczkownik
@@ -955,7 +1132,7 @@ export class Sim {
     if (this.phase === "freeze") {
       if (this.time >= this.phaseEnd) {
         this.phase = "play"; this.playStart = this.time; this.phaseEnd = this.time + (LAYOUTS[this.layout].roundS ?? ROUND_S);
-        for (const p of this.players.values()) { p.protectUntil = this.time + SPAWN_PROTECT_S; p.lastStateT = this.time; }
+        for (const p of this.players.values()) { p.protectUntil = this.time + SPAWN_PROTECT_S; p.lastStateT = p.lastOkT = this.time; }
       }
       return;
     }
@@ -981,6 +1158,7 @@ export class Sim {
         p.mag[p.w] += take; if (p.res[p.w] < 900) p.res[p.w] -= take; p.reloadUntil = 0;
       }
       if (p.brain && this.phase === "play") this.botTick(p, dt);
+      else if (!p.bot && p.veh < 0) this.hostGravity(p, dt);
       this.touchPickups(p);
       const idx = (p.histN % HIST) * HS;
       p.hist[idx] = this.time; p.hist[idx + 1] = p.body.x; p.hist[idx + 2] = p.body.y; p.hist[idx + 3] = p.body.z; p.hist[idx + 4] = p.body.crouch ? 1 : 0;
@@ -1299,6 +1477,7 @@ export class Sim {
     const self: SelfSnap = {
       hp: me.hp, alive: me.alive, w: me.w, team: me.team, group: me.group, mag: { ...me.mag }, res: { ...me.res }, owned: [...me.owned],
       spawn: me.spawn, x: me.body.x, y: me.body.y, z: me.body.z, yaw: me.yaw,
+      crouch: !!me.body.crouch, vy: me.vfix || me.grav ? +me.body.vy.toFixed(2) : 0,
       veh: me.veh, seat: me.seat, vrev: me.veh >= 0 ? this.forklifts[me.veh].rev : 0,
       reloading: !!me.reloadUntil,
       geo: Math.max(0, me.geoUntil - this.time), killedBy: me.killedBy, carry: me.carry,
