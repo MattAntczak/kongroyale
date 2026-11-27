@@ -11,7 +11,7 @@
 
 import { BOXES, PICKUPS, SPAWNS, HALL, LAYOUTS, HALL_LAYOUTS, DEPOT_LAYOUT, VEHICLE_SPAWNS, sites, useLayout, type Box as HallBox, type PickupKind, type PickupSpot } from "./map";
 import { SEATS, VEH_MAX_SPEED, VEH_USE_R, seatPos, stepVehicle, vehicleBlocked, vehicleBox, type VehicleState } from "./vehicle";
-import { EYE_H, PLAYER_H, SPRINT_SPEED, blocked, lineOfSight, rayPlayer, rayWorld, setDynamicBoxes, stepBody, viewDir, type Body } from "./physics";
+import { BOX_HIT_PAD, EYE_H, PLAYER_H, SPRINT_SPEED, blocked, lineOfSight, rayPlayer, rayWorld, setDynamicBoxes, stepBody, viewDir, type Body } from "./physics";
 import { BOX_GRAVITY, BOX_LIFE_S, GRENADE_FUSE_S, GRENADE_GRAVITY, GRENADE_R, WEAPONS, PRICES, SHOP, MONEY_START, MONEY_MAX, MONEY_WIN, MONEY_LOSS, MONEY_KILL, MONEY_POINT, BUY_S, falloff, lobPitch, type WeaponId } from "./weapons";
 import { findPath, freeAt, randomFree, walkable } from "./nav";
 import type { ClientMsg, Config, Difficulty, Ev, HostMsg, Mission, ObjSnap, PlayerSnap, SelfSnap } from "./proto";
@@ -55,9 +55,9 @@ const BOT_NAMES = ["Zenek", "Halina", "Mirek", "Grażyna", "Waldek", "Bożena", 
 const PICKUP_RESPAWN_S: Record<PickupKind, number> = { med: 20, ammo: 15, geo: 45 };
 
 const DIFF = {
-  easy: { react: 0.6, aimErr: 0.11, turn: 3.2, view: 32, burst: 0.35, pause: 0.55, lead: 0.3 },
-  normal: { react: 0.35, aimErr: 0.06, turn: 5.5, view: 45, burst: 0.5, pause: 0.35, lead: 0.7 },
-  hard: { react: 0.2, aimErr: 0.03, turn: 9, view: 60, burst: 0.8, pause: 0.2, lead: 1 },
+  easy: { react: 0.6, aimErr: 0.11, turn: 3.2, view: 32, burst: 0.35, pause: 0.55, lead: 0.3, strafe: 0.3 },
+  normal: { react: 0.35, aimErr: 0.06, turn: 5.5, view: 45, burst: 0.5, pause: 0.35, lead: 0.7, strafe: 0.5 },
+  hard: { react: 0.2, aimErr: 0.03, turn: 9, view: 60, burst: 0.8, pause: 0.2, lead: 1, strafe: 0.7 },
 } as const;
 
 export function mulberry32(seed: number) {
@@ -510,7 +510,7 @@ export class Sim {
       for (const q of this.players.values()) {
         if (q === b.owner || !q.alive || q.team === b.team) continue;
         this.posAt(q, this.time - b.lag, pos);
-        const part = rayPlayer(b.x, b.y, b.z, dx, dy, dz, pos[0], pos[1], pos[2], tOut);
+        const part = rayPlayer(b.x, b.y, b.z, dx, dy, dz, pos[0], pos[1], pos[2], tOut, BOX_HIT_PAD);
         if (part && tOut[0] < tHit) { tHit = tOut[0]; hitP = q; head = part === 2; }
       }
       b.x += dx * tHit; b.y += dy * tHit; b.z += dz * tHit; b.dist += tHit;
@@ -901,12 +901,13 @@ export class Sim {
       p.yaw += Math.max(-turn, Math.min(turn, dy));
       p.pitch += Math.max(-turn, Math.min(turn, wantPitch - p.pitch));
       // strafe, close in or back off
-      if (this.time >= br.strafeUntil) { br.strafe = this.rand() < 0.5 ? -1 : 1; br.strafeUntil = this.time + 0.5 + this.rand() * 1.1; }
+      // (side steps are a share of the walking pace that grows with the level, and change direction every 0.9 to 2.3 s)
+      if (this.time >= br.strafeUntil) { br.strafe = this.rand() < 0.5 ? -1 : 1; br.strafeUntil = this.time + 0.9 + this.rand() * 1.4; }
       const ux = dx / (d || 1), uz = dz / (d || 1);
       const pref = p.w === "shotgun" ? 5 : 16;
       const fwd = d > pref * 1.3 ? 0.8 : d < pref * 0.5 ? -0.6 : 0;
-      mx = ux * fwd + -uz * br.strafe * 0.8;
-      mz = uz * fwd + ux * br.strafe * 0.8;
+      mx = ux * fwd + -uz * br.strafe * cfg.strafe;
+      mz = uz * fwd + ux * br.strafe * cfg.strafe;
       if (!freeAt(b.x + mx * 0.8, b.z + mz * 0.8)) { br.strafe = -br.strafe; mx = ux * fwd; mz = uz * fwd; }
       // a technician at the server holds on to the cable and fights from there
       if (p.acting) { mx = 0; mz = 0; }
@@ -923,6 +924,8 @@ export class Sim {
           } else { br.burstUntil = 0; br.pauseUntil = this.time + cfg.pause * (0.6 + this.rand() * 0.8); }
         }
       }
+      // while a burst lasts the bot all but stops, as a player does to throw straight
+      if (br.burstUntil && this.time < br.burstUntil) { mx *= 0.25; mz *= 0.25; }
       if (p.mag[p.w] === 0) this.startReload(p);
     } else {
       if (p.mag[p.w] < WEAPONS[p.w].mag * 0.5) this.startReload(p);

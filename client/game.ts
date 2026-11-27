@@ -3,7 +3,7 @@
 // health, ammo and kills; this file only predicts what the host will most likely say and accepts what it does say.
 
 import * as THREE from "three";
-import { EYE_H, rayPlayer, rayWorld, stepBody, viewDir, type Body } from "../shared/physics";
+import { BOX_HIT_PAD, EYE_H, rayPlayer, rayWorld, stepBody, viewDir, type Body } from "../shared/physics";
 import { AIM_SPREAD, MONEY_START, PRICES, SHOP, WEAPONS, WEAPON_ORDER, type WeaponId } from "../shared/weapons";
 import { spreadDirs } from "../shared/sim";
 import type { Ev, HostMsg, PlayerSnap, VehicleSnap } from "../shared/proto";
@@ -250,9 +250,9 @@ export class Game {
       const o = this.names.get(id);
       if (id === owner || !o?.alive || o.tm === team) continue;
       const p = h.root.position;
-      if (rayPlayer(x, y, z, dx, dy, dz, p.x, p.y, p.z, out) && out[0] < r.t) { r.t = out[0]; r.player = true; }
+      if (rayPlayer(x, y, z, dx, dy, dz, p.x, p.y, p.z, out, BOX_HIT_PAD) && out[0] < r.t) { r.t = out[0]; r.player = true; }
     }
-    if (this.alive && owner !== this.myId && team !== this.myTeam && rayPlayer(x, y, z, dx, dy, dz, this.body.x, this.body.y, this.body.z, out) && out[0] < r.t) { r.t = out[0]; r.player = true; }
+    if (this.alive && owner !== this.myId && team !== this.myTeam && rayPlayer(x, y, z, dx, dy, dz, this.body.x, this.body.y, this.body.z, out, BOX_HIT_PAD) && out[0] < r.t) { r.t = out[0]; r.player = true; }
     return r;
   };
 

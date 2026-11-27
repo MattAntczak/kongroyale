@@ -9,8 +9,9 @@ export const EYE_H = 1.62;
 export const HEAD_H = 0.3;
 export const GRAVITY = 22;
 export const JUMP_V = 7.6;
-export const WALK_SPEED = 5.2;
-export const SPRINT_SPEED = 7.6;
+// about the pace of CS with a rifle in hand: quick enough to rotate between points, slow enough to be hit
+export const WALK_SPEED = 4.3;
+export const SPRINT_SPEED = 6.0;
 export const STEP_H = 0.45;
 /** Speed up and down a ladder (m/s). Coming down is slow enough to be safe. */
 export const CLIMB_SPEED = 3.4;
@@ -72,7 +73,8 @@ export function stepBody(p: Body, inp: MoveInput, dt: number) {
   const len = Math.hypot(mx, mz);
   if (len > 1) { mx /= len; mz /= len; }
   const speed = inp.sprint ? SPRINT_SPEED : WALK_SPEED;
-  const accel = p.onGround ? 14 : 3;
+  // a little inertia: a body cannot flick from full speed one way to full speed the other in a few frames
+  const accel = p.onGround ? 10 : 3;
   const k = Math.min(1, accel * dt);
   p.vx += (mx * speed - p.vx) * k;
   p.vz += (mz * speed - p.vz) * k;
@@ -140,10 +142,14 @@ export function lineOfSight(ax: number, ay: number, az: number, bx: number, by: 
   return rayWorld(ax, ay, az, dx / d, dy / d, dz / d, d) >= d - 1e-3;
 }
 
-/** Ray against a player standing at (x, y, z): 0 miss, 1 body, 2 head; distance written to out[0]. */
-export function rayPlayer(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, x: number, y: number, z: number, out: number[]): number {
-  const r = PLAYER_R * 0.85;
-  const th = rayBox(ox, oy, oz, dx, dy, dz, x - 0.16, y + PLAYER_H - HEAD_H, z - 0.16, x + 0.16, y + PLAYER_H + 0.02, z + 0.16);
+/** How much wider a player is for a flying box than for a thin ray: the box has a size of its own, so grazing counts. */
+export const BOX_HIT_PAD = 0.12;
+
+/** Ray against a player standing at (x, y, z): 0 miss, 1 body, 2 head; distance written to out[0]. `pad` widens the
+ *  body by that much on every side (the head by half of it, so headshots stay a skill). */
+export function rayPlayer(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, x: number, y: number, z: number, out: number[], pad = 0): number {
+  const r = PLAYER_R * 0.85 + pad, hr = 0.16 + pad * 0.5;
+  const th = rayBox(ox, oy, oz, dx, dy, dz, x - hr, y + PLAYER_H - HEAD_H, z - hr, x + hr, y + PLAYER_H + 0.02 + pad * 0.5, z + hr);
   const tb = rayBox(ox, oy, oz, dx, dy, dz, x - r, y, z - r, x + r, y + PLAYER_H - HEAD_H, z + r);
   if (th === Infinity && tb === Infinity) return 0;
   if (th <= tb) { out[0] = th; return 2; }
